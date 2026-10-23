@@ -1652,7 +1652,7 @@ fn concave_cylinder_emboss_and_deboss_with_sketch_profile_and_text() {
             "name": "Mark"
         }),
     );
-    run(&mut s, "sketch.text", json!({"text": "19.1 mm", "at": [20, 25], "height": 8}));
+    run(&mut s, "sketch.text", json!({"text": "19.1", "at": [22, 25], "height": 6}));
     run(&mut s, "sketch.finish", json!({}));
 
     // Without selecting a target face on an offset plane, emboss refuses to create floating extrusions
@@ -1705,7 +1705,7 @@ fn concave_cylinder_emboss_and_deboss_with_sketch_profile_and_text() {
             "name": "TextSketch"
         }),
     );
-    run(&mut s2, "sketch.text", json!({"text": "19.1", "at": [22, 25], "height": 8}));
+    run(&mut s2, "sketch.text", json!({"text": "19.1", "at": [22, 25], "height": 6}));
     run(&mut s2, "sketch.finish", json!({}));
 
     run(
