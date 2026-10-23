@@ -158,6 +158,7 @@ mod file_load_ui_tests;
 mod fillet_spline_handle_tests;
 pub mod mouse_gesture;
 pub(crate) mod navigation;
+pub use navigation::WebWheelGestures;
 pub(crate) mod open_meshing;
 pub mod params_dialog;
 pub(crate) mod pick_index;
@@ -353,7 +354,7 @@ pub struct Services {
     pub restore_file: Option<Box<dyn Fn(&str)>>,
     /// Show the designs the browser keeps for itself; None: the host has no such store.
     pub browser_files: Option<Box<dyn Fn()>>,
-    /// HTTP for the agent chat's API agents (OpenAI-compatible endpoints); None: no API agents.
+    /// HTTP for the agent chat's API agents (OpenAI-compatible and Anthropic-compatible endpoints); None: no API agents.
     pub agent_http: Option<agent_chat::backend::HttpFn>,
     /// The system keychain, for API agents' keys; None: keys can't be stored.
     pub secrets: Option<std::sync::Arc<dyn agent_chat::backend::Secrets>>,
@@ -451,6 +452,8 @@ pub struct SolveApp {
     pub stand_up: Option<Vec<String>>,
     /// The placement of the component that file came in as: the offer turns it.
     pub stand_up_occurrence: Option<u64>,
+    /// The file's header names an exporter that saves Y up (SolidWorks): the offer says so.
+    pub stand_up_reason: bool,
     /// The anti-aliasing sample counts the graphics device supports (empty without a GPU).
     pub msaa_supported: Vec<u32>,
     /// Settings put back at start because they kept SolidCraft from starting, one line each,
@@ -467,6 +470,8 @@ pub struct SolveApp {
     pub native_resize_border: bool,
     /// macOS: the traffic lights sit over the application bar's left end.
     pub integrated_titlebar: bool,
+    /// The desktop host installed a system File menu; omit the in-window duplicate.
+    pub native_file_menu: bool,
     /// Build bodies' display meshes on the CPU even where the GPU could (safe mode). Read by
     /// [`SolveApp::set_wgpu`].
     pub cpu_meshing: bool,
@@ -582,6 +587,7 @@ impl SolveApp {
             recoverable: Vec::new(),
             stand_up: None,
             stand_up_occurrence: None,
+            stand_up_reason: false,
             msaa_supported: Vec::new(),
             settings_reset: Vec::new(),
             big_operation: false,
@@ -589,6 +595,7 @@ impl SolveApp {
             custom_titlebar: false,
             native_resize_border: false,
             integrated_titlebar: false,
+            native_file_menu: false,
             cpu_meshing: false,
             frame_ms: 0.0,
             frame_rate: frame_rate::FrameRate::default(),
@@ -632,14 +639,36 @@ impl SolveApp {
 
     /// Draw the viewport on the GPU (eframe's wgpu render state, with the app's depth and
     /// stencil buffer bits and MSAA sample count). Without it the viewport renders on the CPU.
+    /// The scene is drawn in a pass of the same kind as the window's.
     pub fn set_wgpu(&mut self, rs: &egui_wgpu::RenderState, depth_bits: u8, stencil_bits: u8, samples: u32) {
-        self.viewport.gpu = Some(gpu::install(rs, depth_bits, stencil_bits, samples, !self.cpu_meshing));
+        let target = crate::gpu::GpuTarget {
+            format: rs.target_format,
+            depth: egui_wgpu::depth_format_from_bits(depth_bits, stencil_bits),
+            samples: samples.max(1),
+            tess: false,
+        };
+        self.set_wgpu_targets(rs, target, target);
+    }
+
+    /// Draw the viewport on the GPU with the scene drawn offscreen: `depth_bits`/`stencil_bits`
+    /// and `samples` are the scene's, while the window's pass (egui's) has no depth and one
+    /// sample. The scene keeps its depth and anti-aliasing; the UI pass pays for neither.
+    pub fn set_wgpu_split(&mut self, rs: &egui_wgpu::RenderState, depth_bits: u8, stencil_bits: u8, samples: u32) {
+        let scene = crate::gpu::GpuTarget {
+            format: rs.target_format,
+            depth: egui_wgpu::depth_format_from_bits(depth_bits, stencil_bits),
+            samples: samples.max(1),
+            tess: false,
+        };
+        let window = crate::gpu::GpuTarget { format: rs.target_format, depth: None, samples: 1, tess: false };
+        self.set_wgpu_targets(rs, scene, window);
+    }
+
+    fn set_wgpu_targets(&mut self, rs: &egui_wgpu::RenderState, scene: crate::gpu::GpuTarget, window: crate::gpu::GpuTarget) {
+        self.viewport.gpu = Some(gpu::install(rs, scene, window, !self.cpu_meshing));
         render_workspace::invalidate_scene(self);
-        self.render_workspace.host = match render_workspace::host_executor(
-            rs.device.limits().max_texture_dimension_2d,
-            self.viewport.gpu.is_some_and(|g| g.depth.is_some()),
-            samples.max(1),
-        ) {
+        let (samples, has_depth) = self.viewport.gpu.map_or((1, false), |g| (g.samples.max(1), g.depth.is_some()));
+        self.render_workspace.host = match render_workspace::host_executor(rs.device.limits().max_texture_dimension_2d, has_depth, samples) {
             Ok(executor) => Some(executor),
             Err(error) => {
                 self.set_status(error, true);
@@ -955,7 +984,7 @@ impl SolveApp {
             // inserted the way Insert STEP or Insert Mesh would (#1240).
             self.pick_open(|app, path| {
                 let Some(path) = path else { return };
-                if is_design_path(&path) {
+                if solidcraft_engine::io::is_design_path(&path) {
                     if app.run("component.insert_design", json!({ "path": path })).is_ok() {
                         app.fit_view();
                     }
@@ -1527,7 +1556,14 @@ impl SolveApp {
                 )
             })
             .map_or(self.synthetic.len(), |i| i + 1);
+        let follow = self.ui.agent_cursor.show;
         for event in self.synthetic.drain(..n) {
+            // The agent cursor shows the agent's own pointer input too, not only its commands.
+            match &event {
+                egui::Event::PointerMoved(at) if follow => self.agent.follow_input(*at, false, self.now),
+                egui::Event::PointerButton { pos, pressed, .. } if follow => self.agent.follow_input(*pos, *pressed, self.now),
+                _ => {}
+            }
             match &event {
                 egui::Event::ModifiersChanged(modifiers) => self.synthetic_mods = *modifiers,
                 egui::Event::PointerButton { pos, modifiers, pressed, .. } => {
@@ -1713,6 +1749,7 @@ impl SolveApp {
         context_menu::show(self, ui.ctx());
         mouse_gesture::show(self, ui.ctx());
         delete::show(self, ui.ctx());
+        linked_source::show_copies(self, ui.ctx());
         shortcut_box::show(self, ui.ctx());
         prefs::show(self, ui.ctx());
         toolbar_custom::window(self, ui.ctx());
@@ -1877,12 +1914,13 @@ pub fn command_label(id: &str) -> &str {
     solidcraft_engine::find_command(id).map_or(id, |c| c.label)
 }
 
-/// An engine error with the command's label instead of its id: "Shell: offset must be …". The
-/// label follows the interface language; the engine's sentence stays as the engine wrote it.
+/// An engine error with the command's label instead of its id: "Shell: offset must be …".
+/// The command label and catalogued engine messages follow the interface language.
 pub fn friendly_error(id: &str, e: &str) -> String {
     let label = i18n::tr_label(command_label(id));
     let msg = e.replace(&format!("invalid parameters for `{id}`: "), "").replace(&format!("{id}: "), "").replace(&format!("`{id}`"), label);
-    if msg.starts_with(label) { msg } else { format!("{label}: {msg}") }
+    let msg = i18n::tr_label(&msg);
+    if msg.starts_with(label) { msg.to_string() } else { format!("{label}: {msg}") }
 }
 
 pub fn now_ms() -> f64 {
@@ -1894,10 +1932,3 @@ pub fn now_ms() -> f64 {
 mod picker_test_support;
 #[cfg(test)]
 mod test_support;
-
-/// A SolidCraft design file (`.solidcraft`, or a design saved as JSON), as opposed to a STEP or
-/// mesh file.
-fn is_design_path(path: &str) -> bool {
-    let ext = std::path::Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
-    matches!(ext.as_str(), "solidcraft" | "solvecraft" | "json")
-}
