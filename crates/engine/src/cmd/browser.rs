@@ -4,6 +4,8 @@
 //! Browser items are keyed per component folder (`bodies`, `sketches`, `construction`): a body
 //! by name, a sketch or construction plane by feature id.
 
+use std::collections::BTreeMap;
+
 use serde_json::{Value, json};
 
 use solidcraft_doc::FeatureKind;
@@ -337,8 +339,11 @@ fn visibility(s: &mut Session, p: &Value) -> Result<Value> {
         s.visibility.hidden_folders.retain(|k| !k.ends_with(&own) && !groups.iter().any(|g| k.ends_with(g.as_str())));
     }
     let v = &mut s.visibility;
-    if visible && str_(p, "folder") == Some("bodies") {
-        v.hidden_occurrences.clear();
+    match str_(p, "folder") {
+        Some("bodies") if visible => v.hidden_occurrences.clear(),
+        // Showing a whole folder shows the folder too.
+        Some("origin") if visible => v.origin_hidden = Some(false),
+        _ => {}
     }
     for it in &items {
         match it {
@@ -539,6 +544,23 @@ fn replace_body_name(v: &mut Value, old: &str, new: &str, names_body: bool, dept
     }
 }
 
+/// A frame member feature's bodies by line id, as its own result made them: what pins each
+/// member's name to its line. `None` for any other feature, or when they don't pair up.
+fn member_pins(s: &Session, fid: u64) -> Option<BTreeMap<String, String>> {
+    let f = s.doc.feature(fid)?;
+    let result = s.model.result(fid)?;
+    let lines = solidcraft_doc::frame::member_line_ids(&result.state, &f.kind).ok()?;
+    let made: Vec<String> = result.state.bodies.iter().filter(|b| b.feature == fid).map(|b| b.name.clone()).collect();
+    (lines.len() == made.len()).then(|| lines.into_iter().zip(made).collect())
+}
+
+/// Whether the `i`-th new body of `f` is numbered by the body counter (`BodyN`): it has no stored
+/// name of its own and is not numbered after the feature's first name (`Ribs (4)`).
+pub(crate) fn counted(f: &solidcraft_doc::Feature, i: usize) -> bool {
+    let first = f.body_names.first().is_some_and(|n| !n.trim().is_empty());
+    f.body_names.get(i).is_none_or(|n| n.trim().is_empty()) && (f.shell_piece_order || i < f.body_names.len() || !first)
+}
+
 fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "body.rename";
     let old = str_(p, "body").ok_or_else(|| bad(cmd, "`body` must be a body name"))?.to_string();
@@ -566,10 +588,6 @@ fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
     // own, and every counted body after it would move down one (`Body3` becoming `Body1`) and
     // break what names it. Those later features keep the names they made too (#1109): each one's
     // own result holds them, also for bodies a later feature joins away.
-    let counted = |f: &solidcraft_doc::Feature, i: usize| {
-        let first = f.body_names.first().is_some_and(|n| !n.trim().is_empty());
-        f.body_names.get(i).is_none_or(|n| n.trim().is_empty()) && (f.shell_piece_order || i < f.body_names.len() || !first)
-    };
     // Bodies later features name after this one (`Top (1)`, a split's other piece) keep their
     // names too: they would otherwise follow it, and break what names them (#3510).
     let derived = format!("{old} (");
@@ -589,22 +607,40 @@ fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
             .collect(),
         None => Vec::new(),
     };
+    // Frame members are named by their lines (#4003): each keeps the name it has now on its
+    // line, whichever lines come and go later, and the renamed one takes its new name.
+    let later_pins: Vec<Option<BTreeMap<String, String>>> = later.iter().map(|(id, _)| member_pins(s, *id)).collect();
+    let own_pins = member_pins(s, fid).and_then(|mut pins| {
+        let line = pins.iter().find(|(_, n)| **n == old).map(|(line, _)| line.clone())?;
+        pins.insert(line, name.to_string());
+        Some(pins)
+    });
     let d = s.doc_mut();
-    for (id, made) in &later {
+    for ((id, made), pins) in later.iter().zip(later_pins) {
         if let Some(f) = d.feature_mut(*id) {
-            f.body_names.clone_from(made);
+            if let (Some(pins), FeatureKind::FrameMember { names, .. }) = (pins, &mut f.kind) {
+                *names = pins;
+                f.body_names.clear();
+            } else {
+                f.body_names.clone_from(made);
+            }
         }
     }
     let f = d.feature_mut(fid).ok_or_else(|| bad(cmd, "the body's feature is gone"))?;
-    while f.body_names.len() < siblings.len().max(k + 1) {
-        let i = f.body_names.len();
-        f.body_names.push(siblings.get(i).cloned().unwrap_or_default());
-    }
-    for (slot, current) in f.body_names.iter_mut().zip(&siblings) {
-        slot.clone_from(current);
-    }
-    if let Some(slot) = f.body_names.get_mut(k) {
-        *slot = name.to_string();
+    if let (Some(pins), FeatureKind::FrameMember { names, .. }) = (own_pins, &mut f.kind) {
+        *names = pins;
+        f.body_names.clear();
+    } else {
+        while f.body_names.len() < siblings.len().max(k + 1) {
+            let i = f.body_names.len();
+            f.body_names.push(siblings.get(i).cloned().unwrap_or_default());
+        }
+        for (slot, current) in f.body_names.iter_mut().zip(&siblings) {
+            slot.clone_from(current);
+        }
+        if let Some(slot) = f.body_names.get_mut(k) {
+            *slot = name.to_string();
+        }
     }
     // Later features refer to bodies by name.
     let mut failed = None;
@@ -642,7 +678,8 @@ fn rename_body(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, e));
     }
     d.rename_body_keys(&old, name);
-    for b in s.visibility.hidden_bodies.iter_mut().filter(|b| **b == old) {
+    let v = &mut s.visibility;
+    for b in v.hidden_bodies.iter_mut().chain(v.locked_bodies.iter_mut()).filter(|b| **b == old) {
         *b = name.to_string();
     }
     Ok(json!({"body": old, "name": name}))
@@ -1139,10 +1176,12 @@ mod tests {
         // The browser's Sketches folder hidden: sketches shown one by one aren't drawn either,
         // only the sketch being edited.
         assert!(s.visibility.shown_sketches.contains(&floor));
-        assert!([floor, drain].iter().all(|id| !crate::view::sketch_drawn(&s, *id, false)));
+        run(&mut s, "browser.visibility", json!({"tree_folders": ["c0/sketches"], "visible": false}));
+        assert!([floor, drain].iter().all(|id| !crate::view::sketch_shown(&s, *id)));
         s.active_sketch = Some(floor);
-        assert!(crate::view::sketch_drawn(&s, floor, false) && !crate::view::sketch_drawn(&s, drain, false));
+        assert!(crate::view::sketch_shown(&s, floor) && !crate::view::sketch_shown(&s, drain));
         s.active_sketch = None;
+        run(&mut s, "browser.visibility", json!({"tree_folders": ["c0/sketches"], "visible": true}));
         // Bodies (following a rename) and construction planes.
         run(&mut s, "browser.visibility", json!({"items": [body.clone(), "Floor", "xy"], "visible": false}));
         assert!(crate::view::scene(&s, &cam).meshes.is_empty());
@@ -1205,6 +1244,43 @@ mod tests {
         let second = run(&mut s, "browser.group", params)["group"].as_u64().unwrap();
         assert!(second > first, "deleted group {first} was reused as {second}");
         assert!(s.execute("browser.rename_group", &json!({"group": first, "name": "Stale reference"})).is_err());
+    }
+
+    #[test]
+    fn the_browsers_view_is_saved_with_the_design() {
+        let mut s = Session::default();
+        run(&mut s, "solid.box", json!({"length": 10, "width": 10, "height": 10}));
+        let sketch = run(&mut s, "sketch.create", json!({"plane": "XY"}))["sketch"].as_u64().unwrap();
+        run(&mut s, "sketch.rectangle.two_point", json!({"p0": [20, 0], "p1": [30, 10]}));
+        run(&mut s, "sketch.finish", json!({}));
+        let body = names(&s)[0].clone();
+        s.mark_saved();
+        let undo = s.undo.len();
+        assert!(crate::view::sketch_shown(&s, sketch));
+        // The folders' eyes, a sketch's profiles and dimensions and a lock: view state to save.
+        let v = &mut s.visibility;
+        v.origin_hidden = Some(true);
+        v.hidden_folders.push("c0/sketches".into());
+        v.hidden_profiles.push(sketch);
+        v.shown_dimensions.push(sketch);
+        v.locked_bodies.push(body.clone());
+        assert!(s.is_dirty() && s.undo.len() == undo, "a change to save, not an undo step");
+        assert!(!crate::view::sketch_shown(&s, sketch), "the hidden Sketches folder hides an unused sketch");
+        run(&mut s, "body.rename", json!({"body": body, "name": "Locked"}));
+        assert_eq!(s.visibility.locked_bodies, vec!["Locked".to_string()]);
+        // Saved and opened again, the design brings all of it back, with nothing to save.
+        let text = s.design().to_json();
+        let opened = Session::new(solidcraft_doc::Document::from_json(&text).unwrap());
+        assert_eq!(opened.visibility, s.visibility);
+        assert!(!opened.is_dirty());
+        assert!(!crate::view::sketch_shown(&opened, sketch));
+        // Showing a whole folder shows the folder itself.
+        run(&mut s, "browser.visibility", json!({"folder": "origin", "visible": true}));
+        run(&mut s, "browser.visibility", json!({"folder": "sketches", "visible": true}));
+        assert_eq!((s.visibility.origin_hidden, s.visibility.hidden_folders.is_empty()), (Some(false), true));
+        // A design that never touched the Origin's eye leaves it to the app.
+        let plain = solidcraft_doc::Document::from_json(&Session::default().design().to_json()).unwrap();
+        assert!(plain.visibility.is_empty() && plain.visibility.origin_hidden.is_none());
     }
 
     #[test]
