@@ -199,7 +199,7 @@ Grok Build also supports `XAI_API_KEY` for users who choose API authentication.
 - **Custom command:** any other program that speaks ACP on stdin and stdout, such as
   `my-agent --acp`. SolidCraft starts it directly, not through a shell.
 - **OpenAI-compatible API:** a preset (Ollama `http://localhost:11434/v1`, LM Studio
-  `http://localhost:1234/v1`, OpenAI) or a custom URL, the model name, and an optional key.
+  `http://localhost:1234/v1`, OpenAI, Mammouth AI `https://api.mammouth.ai/v1`) or a custom URL, the model name, and an optional key.
 - **Anthropic-compatible API:** a preset (Anthropic) or a custom URL, for an endpoint that
   speaks the Anthropic Messages API (`{base}/v1/messages`). This covers Anthropic itself and
   providers that offer an Anthropic-compatible endpoint, such as DeepSeek and Qwen.
@@ -208,7 +208,27 @@ Grok Build also supports `XAI_API_KEY` for users who choose API authentication.
   OpenAI-compatible endpoint for its models; an Anthropic-compatible one gets a short message,
   because not every such endpoint lists models (Qwen's has no model list). For these agents
   SolidCraft runs the conversation itself, with the same tools, limits and questions as for a
-  coding agent, and at most 24 model requests per message.
+  coding agent, and at most 24 model requests per message. **Request timeout** is how long one model request may
+  take: 300 s by default, from 30 s to an hour. A slow local model (a large model on modest
+  hardware, or a long message with many tool results) may need more; raise it here or in the
+  endpoint's entry under **Agents**, where a change applies from the next request. A request that
+  runs out of time ends the message with the limit it hit and where to raise it.
+
+### An agent inside WSL (Windows)
+
+An agent installed inside WSL keeps its own settings, skills and sign-in there. Add it as a
+**Custom command** that starts it through `wsl.exe`, for example:
+
+```
+wsl.exe -d Ubuntu -e bash -lc claude-agent-acp
+```
+
+`bash -lc` runs your login shell's setup, so the agent is found where your `PATH` puts it (npm,
+nvm, Volta). When the command's program is `wsl` or `wsl.exe`, SolidCraft gives the agent its
+working folder and the `solidcraft-app` server's program as WSL shows them (`C:\Users\…` becomes
+`/mnt/c/Users/…`). The server itself still runs on Windows and reaches the app at `127.0.0.1`, so
+this works with WSL's default networking. If you moved WSL's drive mounts away from `/mnt`
+(`automount.root` in `/etc/wsl.conf`), those paths won't match and the agent can't start the server.
 
 ## Signing in
 

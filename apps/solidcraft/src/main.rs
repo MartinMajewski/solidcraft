@@ -111,6 +111,9 @@ impl eframe::App for App {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
                 }
                 solidcraft_engine::crash::phase(solidcraft_engine::crash::RUNNING);
+                // A DMG install has no installer step: put solidcraft-cli on PATH, quietly.
+                #[cfg(target_os = "macos")]
+                std::thread::spawn(solidcraft_ui_egui::cli_link::install_on_launch);
                 if let Some(dir) = self.starting.take() {
                     startup::started(&dir);
                 }
@@ -166,6 +169,11 @@ impl eframe::App for App {
         solidcraft_ui_egui::agent_chat::shutdown(&mut self.solve);
         // A save still being written ends before the app does.
         solidcraft_ui_egui::save_job::tick(&mut self.solve, true);
+        // Pictures still being drawn off the window thread (Home cards, file previews) end
+        // before the GPU is torn down: one drawn while the process exits can crash the driver.
+        if !solidcraft_engine::capture::close(std::time::Duration::from_secs(5)) {
+            log::warn!("a picture was still being drawn as the app closed");
+        }
         solidcraft_ui_egui::recovery_ui::close(&mut self.solve);
         solidcraft_engine::crash::end_session();
         if let Some(lost_at) = self.gpu.as_ref().and_then(|g| g.lost_at) {
@@ -369,7 +377,7 @@ fn agent_http(r: &solidcraft_ui_egui::agent_chat::backend::HttpRequest) -> Resul
     let agent: ureq::Agent = ureq::Agent::config_builder()
         .tls_config(tls)
         .http_status_as_error(false)
-        .timeout_global(Some(Duration::from_secs(r.timeout_s.clamp(1, 900))))
+        .timeout_global(Some(Duration::from_secs(r.timeout_s.clamp(1, 3600))))
         .timeout_connect(Some(Duration::from_secs(10)))
         .user_agent("SolidCraft")
         .max_redirects(0)
@@ -724,10 +732,15 @@ fn main() -> eframe::Result {
             let mut app = SolveApp::new(Session::default(), services(cc));
             app.apply_off_thread = Some(solidcraft_ui_egui::dialogs::APPLY_AT_ONCE);
             app.custom_titlebar = CUSTOM_TITLEBAR;
-            // Windows: the OS hit test offers the resize border, at the window's DPI, from the
-            // first message (#1381).
             #[cfg(target_os = "windows")]
             {
+                // Windows: the taskbar button shows the mark even when slow first frames keep the
+                // taskbar waiting for the window's icon.
+                if !native_frame::set_class_icon(cc) {
+                    eprintln!("SolidCraft window: no class icon; the taskbar may show a generic one");
+                }
+                // The OS hit test offers the resize border, at the window's DPI, from the first
+                // message (#1381).
                 app.native_resize_border = CUSTOM_TITLEBAR && native_frame::install(cc);
                 if CUSTOM_TITLEBAR && !app.native_resize_border {
                     eprintln!("SolidCraft window: no native resize border; egui edge zones instead");
@@ -871,6 +884,9 @@ fn wgpu_options(cpu: bool, preference: Option<&str>) -> eframe::egui_wgpu::WgpuC
             eprintln!("SolidCraft graphics: starting {backends:?}");
             setup.instance_descriptor.backends = backends;
         }
+        let intel_mac = cfg!(all(target_os = "macos", target_arch = "x86_64"));
+        let indirect = std::env::var(startup::INDIRECT_VALIDATION_ENV).ok();
+        setup.instance_descriptor.flags = startup::window_instance_flags(setup.instance_descriptor.flags, intel_mac, indirect.as_deref());
         if cpu {
             setup.native_adapter_selector = Some(std::sync::Arc::new(startup::pick_cpu_adapter));
         }

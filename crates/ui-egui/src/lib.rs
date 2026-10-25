@@ -17,6 +17,7 @@ pub mod browser;
 pub mod browser_canvas;
 pub mod browser_prompts;
 pub mod canvas;
+pub mod cli_link;
 #[cfg(test)]
 mod colour_tokens_tests;
 #[cfg(test)]
@@ -52,6 +53,7 @@ pub mod dim_view;
 #[cfg(test)]
 mod dimension_create_ui_tests;
 pub mod documents;
+pub mod drag_extrude;
 pub mod drag_snap;
 pub mod edit_clipboard;
 #[cfg(test)]
@@ -156,6 +158,7 @@ mod file_picker;
 pub(crate) mod frame_watch;
 #[cfg(test)]
 mod history_off_thread_tests;
+mod move_preview;
 pub use file_picker::FilePickerFuture;
 #[cfg(test)]
 mod blend_arrow_tests;
@@ -248,6 +251,7 @@ mod thin_extrude_tests;
 pub mod timeline;
 pub mod timeline_left;
 pub mod titlebar;
+pub mod tool_cursor;
 pub mod tool_modifiers;
 pub mod toolbar;
 pub mod toolbar_custom;
@@ -256,6 +260,7 @@ pub mod ui_kit;
 #[cfg(test)]
 mod ui_kit_guard_tests;
 pub mod update;
+pub mod view_pick;
 pub mod viewport;
 mod viewport_layout;
 pub mod workspace;
@@ -303,6 +308,9 @@ pub struct UiState {
     pub up_axis: solidcraft_engine::render::UpAxis,
     /// The agent cursor: shown, speed, follow camera (#35).
     pub agent_cursor: agent_cursor::Settings,
+    /// The running tool's icon rides beside the pointer in the viewport (View settings; off by
+    /// default).
+    pub tool_cursor: bool,
 }
 
 impl Default for UiState {
@@ -324,6 +332,7 @@ impl Default for UiState {
             ground_shadow: true,
             up_axis: Default::default(),
             agent_cursor: Default::default(),
+            tool_cursor: false,
         }
     }
 }
@@ -532,6 +541,15 @@ pub struct SolveApp {
     applied_system_fonts: bool,
 }
 
+impl Drop for SolveApp {
+    /// The Home pictures it started are drawn before it goes: one still on the GPU as the
+    /// process exits can crash the graphics driver.
+    fn drop(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        home::finish_pictures(&mut self.home, std::time::Duration::from_secs(10));
+    }
+}
+
 impl SolveApp {
     pub fn new(mut session: Session, services: Services) -> Self {
         #[cfg(test)]
@@ -674,7 +692,9 @@ impl SolveApp {
     }
 
     fn set_wgpu_targets(&mut self, rs: &egui_wgpu::RenderState, scene: crate::gpu::GpuTarget, window: crate::gpu::GpuTarget) {
-        self.viewport.gpu = Some(gpu::install(rs, scene, window, !self.cpu_meshing));
+        let (target, stats) = gpu::install(rs, scene, window, !self.cpu_meshing);
+        self.viewport.gpu = Some(target);
+        self.viewport.draw_stats = Some(stats);
         render_workspace::invalidate_scene(self);
         let (samples, has_depth) = self.viewport.gpu.map_or((1, false), |g| (g.samples.max(1), g.depth.is_some()));
         self.render_workspace.host = match render_workspace::host_executor(rs.device.limits().max_texture_dimension_2d, has_depth, samples) {
@@ -694,6 +714,7 @@ impl SolveApp {
         self.msaa_supported = rs.msaa_supported.clone();
         let info = rs.adapter.get_info();
         self.help.gpu = Some(format!("{} ({:?}, {:?})", info.name.trim(), info.backend, info.device_type));
+        self.viewport.adapter = format!("{:?} · {}", info.backend, info.name);
     }
 
     /// Preferences kept between runs (JSON), for the host to store.
@@ -709,6 +730,7 @@ impl SolveApp {
             "browser_expanded": self.tree.expanded,
             "recent": self.home.recent,
             "recent_opened_at": self.home.opened_at,
+            "recent_forgotten": self.home.forgotten,
             "shortcut_box": self.sbox.prefs(),
             "shortcuts": self.keymap.prefs(),
             "toolbar": self.toolbar_custom.prefs(),
@@ -764,6 +786,7 @@ impl SolveApp {
             .and_then(Value::as_array)
             .map(|a| a.iter().filter_map(Value::as_str).take(home::MAX_RECENT).map(str::to_string).collect())
             .unwrap_or_default();
+        self.home.forgotten = keys("recent_forgotten");
         if let Some(s) = v.get("shortcut_box") {
             self.sbox.load(s);
         }
@@ -811,6 +834,20 @@ impl SolveApp {
                     if v.get("mode").and_then(Value::as_str) == Some("compact") { shell::LayoutMode::Docked } else { shell::LayoutMode::Floating };
                 self.preferences.layout = layout;
                 self.ui.layout = layout;
+            }
+            if matches!(id, "browser.expand_all" | "browser.collapse_all") {
+                let strings = |key: &str| -> Vec<String> {
+                    v.get(key)
+                        .and_then(Value::as_array)
+                        .map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).take(10_000).collect())
+                        .unwrap_or_default()
+                };
+                browser::apply_fold(
+                    self,
+                    v.get("open").and_then(Value::as_bool).unwrap_or(id == "browser.expand_all"),
+                    &strings("open_by_default"),
+                    &strings("closed_by_default"),
+                );
             }
             if id == "view.history_layout" {
                 if let Some(width) = v.get("width").and_then(Value::as_f64) {
@@ -919,12 +956,32 @@ impl SolveApp {
     /// Start a command the way a toolbar click does: interactive tools and dialogs for commands
     /// that have them, otherwise run it with defaults.
     pub fn start(&mut self, id: &str) {
+        self.start_with_variant_memory(id, true);
+    }
+
+    /// A dedicated toolbar button starts its exact tool without replacing the sketch family's
+    /// main button. Choosing a variant from a menu still uses `start` and remembers that choice.
+    pub(crate) fn start_pinned(&mut self, id: &str) {
+        self.start_with_variant_memory(id, false);
+    }
+
+    fn start_with_variant_memory(&mut self, id: &str, remember_variant: bool) {
         if id == "ui.palette" {
             shortcut_box::open(self, None);
             return;
         }
         // A file is loading: the design waits for it.
         if self.file_load.busy() || self.file_picker.is_some() {
+            return;
+        }
+        // Front … Isometric (Ctrl+1…7 by default) turn the view as the view cube's faces do. The
+        // flat pattern is a 2D page: it has no other side to turn to.
+        if solidcraft_engine::standard_view(id).is_some() {
+            if !dialogs_sheet::flat_active(self) {
+                // `view.isometric` → "isometric", which `StandardView::parse` reads as Iso.
+                self.animate_view(id.trim_start_matches("view."));
+                self.home.open = false;
+            }
             return;
         }
         if id == "view.normal_to" {
@@ -1031,7 +1088,7 @@ impl SolveApp {
         if !sketch_tools::start_hook(self, id) {
             return;
         }
-        if solidcraft_engine::find_command(id).is_some_and(|c| c.info(&self.session).enabled) {
+        if remember_variant && solidcraft_engine::find_command(id).is_some_and(|c| c.info(&self.session).enabled) {
             self.preferences.sketch_variants.remember(id);
         }
         if id == "parameters.change" {
@@ -1085,7 +1142,9 @@ impl SolveApp {
             self.last_command = Some((spec.id.to_string(), spec.label.to_string()));
         }
         if let Some(mut t) = tools::Tool::for_command(id) {
-            if let Some(params) = tools::constraint_preselection(id, &self.session.selection) {
+            let state = self.session.world_state();
+            let sketch = self.session.active_sketch.and_then(|s| state.sketch(s)).map(|ss| &ss.sketch);
+            if let Some(params) = tools::constraint_preselection(id, &self.session.selection, sketch) {
                 if self.run(id, params).is_ok() {
                     let _ = self.session.execute("select.clear", &json!({}));
                     self.set_status("Constraint applied", false);
@@ -1164,11 +1223,8 @@ impl SolveApp {
             self.edit_sketch(id);
             return;
         }
-        if self.session.active_sketch.is_some() {
-            self.finish_sketch();
-        }
         let Some(idx) = self.session.doc.feature_index(id) else { return };
-        let marker = self.session.doc.marker;
+        let marker = self.finish_sketch_for_edit();
         self.tool = None;
         if dialogs::roll_marker(self, Some(idx)).is_err() {
             return;
@@ -1199,22 +1255,29 @@ impl SolveApp {
         if self.session.active_sketch == Some(id) {
             return;
         }
-        if self.session.active_sketch.is_some() {
-            self.finish_sketch();
-        }
+        let Some(idx) = self.session.doc.feature_index(id) else { return };
+        let marker = self.finish_sketch_for_edit();
         self.tool = None;
         self.dialog = None;
-        let Some(idx) = self.session.doc.feature_index(id) else { return };
-        let marker = self.session.doc.marker;
-        let rolled = marker != Some(idx + 1) && self.run("timeline.roll_to", json!({ "position": idx + 1 })).is_ok();
+        let rolled = self.session.doc.marker != Some(idx + 1) && self.run("timeline.roll_to", json!({ "position": idx + 1 })).is_ok();
         if self.run("sketch.edit", json!({ "sketch": id })).is_err() {
-            if rolled {
+            if rolled || marker != self.session.doc.marker {
                 self.restore_marker(marker);
             }
             return;
         }
-        self.pre_sketch_marker = rolled.then_some(marker);
+        self.pre_sketch_marker = (rolled || marker != self.session.doc.marker).then_some(marker);
         dialogs::look_at_sketch(self);
+    }
+
+    /// Pass the original marker to the next editor. Restoring it between editors could finish
+    /// in the background after the next rollback, moving the marker out from under that edit.
+    fn finish_sketch_for_edit(&mut self) -> Option<usize> {
+        let marker = self.pre_sketch_marker.take().unwrap_or(self.session.doc.marker);
+        if self.session.active_sketch.is_some() {
+            self.finish_sketch();
+        }
+        marker
     }
 
     /// Finish the active sketch: stop editing and restore the history marker Edit Sketch moved.

@@ -524,9 +524,10 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
             });
             if opts.tapped {
                 enter |= crate::dialogs_thread::hole_rows(ui, &app.session.doc, &mut opts.thread, &mut opts.custom_thread);
+                ui_kit::checkbox_grid(ui, &mut [("Full thread depth", &mut opts.thread_full_depth)], 1);
             }
             // Through all, the tip lies past the part.
-            if *kind == 0 && !opts.all {
+            if !opts.all {
                 form_row(ui, "Drill Point", |ui| {
                     let mut tip = usize::from(opts.angled);
                     combo(ui, "hole_tip", &["Flat", "Angle"], &mut tip);
@@ -781,7 +782,11 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
             extra_options(ui, "move_options", &mut d.extra, &[("Create Copy", "copy")]);
         }
         Kind::Primitive { cmd, fields, operation, at } => {
+            let from_sketch = *cmd == "solid.coil" && d.inputs.first().is_some_and(|i| i.accept & selection::PROFILES != 0 && !i.items.is_empty());
             for (k, v) in fields.iter_mut() {
+                if from_sketch && (*k == "diameter" || *k == "section_size") {
+                    continue;
+                }
                 enter |= expr_row(ui, k, v);
             }
             if *cmd == "solid.coil" {
@@ -906,7 +911,21 @@ fn measure_rows(app: &SolveApp, ui: &mut egui::Ui, r: Option<&Value>, show: &mut
                 }
             }
         } else {
-            value(ui, crate::i18n::tr_label("Distance"), &crate::prefs::show_mm(app, d, 1));
+            let text = crate::prefs::show_mm(app, d, 1);
+            form_row(ui, crate::i18n::tr_label("Distance"), |ui| {
+                let size = crate::theme::Tokens::get().form_close_size;
+                // The value keeps the room left of the button, so the button stays inside the row.
+                ui.scope(|ui| {
+                    ui.set_max_width((ui.available_width() - size).max(0.0));
+                    ui_kit::text(ui, &text, ui_kit::Text::Cell);
+                });
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::hover());
+                let copy = ui_kit::icon_button_at(ui, rect, "copy", crate::i18n::tr_label("Copy"));
+                crate::scenario::publish_handle("measure:copy:distance", copy.rect.center());
+                if copy.clicked() {
+                    ui.ctx().copy_text(text.clone());
+                }
+            });
         }
         let delta = b - a;
         for (l, v) in [("ΔX", delta.x), ("ΔY", delta.y), ("ΔZ", delta.z)] {
