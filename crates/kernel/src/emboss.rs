@@ -1062,14 +1062,14 @@ mod tests {
             Region2 { outer: Loop2::polygon(&[Vec2::new(-3., -3.), Vec2::new(3., -3.), Vec2::new(3., 3.), Vec2::new(-3., 3.)]), holes: vec![] };
 
         // Emboss (raised feature by 1 mm)
-        let embossed = emboss_project(&concave_part, at, &sketch_plane, &[profile.clone()], 1.0).unwrap();
+        let embossed = emboss_project(&concave_part, at, &sketch_plane, std::slice::from_ref(&profile), 1.0).unwrap();
         assert_eq!(embossed.shell_count(), 1);
         let vol_before = crate::measure(&concave_part).unwrap().volume;
         let vol_embossed = crate::measure(&embossed).unwrap().volume;
         assert!(vol_embossed > vol_before, "emboss should add volume: {vol_embossed} vs {vol_before}");
 
         // Deboss (cut feature by 1 mm)
-        let debossed = emboss_project(&concave_part, at, &sketch_plane, &[profile], -1.0).unwrap();
+        let debossed = emboss_project(&concave_part, at, &sketch_plane, std::slice::from_ref(&profile), -1.0).unwrap();
         assert_eq!(debossed.shell_count(), 1);
         let vol_debossed = crate::measure(&debossed).unwrap().volume;
         assert!(vol_debossed < vol_before, "deboss should remove volume: {vol_debossed} vs {vol_before}");
@@ -1083,12 +1083,12 @@ mod tests {
         let sketch_plane = Plane::new(Vec3::new(20., 20., 30.), Vec3::X, Vec3::Y).unwrap();
         let profile =
             Region2 { outer: Loop2::polygon(&[Vec2::new(-5., -5.), Vec2::new(5., -5.), Vec2::new(5., 5.), Vec2::new(-5., 5.)]), holes: vec![] };
-        let embossed_plane = emboss_project(&block, at_planar, &sketch_plane, &[profile.clone()], 2.0).unwrap();
+        let embossed_plane = emboss_project(&block, at_planar, &sketch_plane, std::slice::from_ref(&profile), 2.0).unwrap();
         let vol_block = crate::measure(&block).unwrap().volume;
         let vol_emb_plane = crate::measure(&embossed_plane).unwrap().volume;
         assert!((vol_emb_plane - (vol_block + 10.0 * 10.0 * 2.0)).abs() < 1e-4);
 
-        let debossed_plane = emboss_project(&block, at_planar, &sketch_plane, &[profile.clone()], -2.0).unwrap();
+        let debossed_plane = emboss_project(&block, at_planar, &sketch_plane, std::slice::from_ref(&profile), -2.0).unwrap();
         let vol_deb_plane = crate::measure(&debossed_plane).unwrap().volume;
         assert!((vol_deb_plane - (vol_block - 10.0 * 10.0 * 2.0)).abs() < 1e-4);
 
@@ -1096,11 +1096,11 @@ mod tests {
         let cyl = crate::cylinder(Vec3::ZERO, Vec3::Z, 20., 40.).unwrap();
         let at_cyl = Vec3::new(20., 0., 20.);
         let sketch_plane_cyl = Plane::new(Vec3::new(25., 0., 20.), -Vec3::Y, Vec3::Z).unwrap();
-        let embossed_cyl = emboss_project(&cyl, at_cyl, &sketch_plane_cyl, &[profile.clone()], 1.0).unwrap();
+        let embossed_cyl = emboss_project(&cyl, at_cyl, &sketch_plane_cyl, std::slice::from_ref(&profile), 1.0).unwrap();
         let vol_cyl = crate::measure(&cyl).unwrap().volume;
         assert!(crate::measure(&embossed_cyl).unwrap().volume > vol_cyl);
 
-        let debossed_cyl = emboss_project(&cyl, at_cyl, &sketch_plane_cyl, &[profile], -1.0).unwrap();
+        let debossed_cyl = emboss_project(&cyl, at_cyl, &sketch_plane_cyl, std::slice::from_ref(&profile), -1.0).unwrap();
         assert!(crate::measure(&debossed_cyl).unwrap().volume < vol_cyl);
     }
 }

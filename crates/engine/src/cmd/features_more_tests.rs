@@ -2231,8 +2231,8 @@ fn half_cylinder_interior_emboss_text() {
     assert!(!embossed_pts.is_empty(), "embossed text should protrude to radius < 15.5");
     let min_z = embossed_pts.iter().map(|p| p.z).fold(f64::INFINITY, f64::min);
     let max_z = embossed_pts.iter().map(|p| p.z).fold(f64::NEG_INFINITY, f64::max);
-    assert!(min_z >= 9.8 && min_z <= 10.5, "embossed text baseline should be ~10, got {min_z}");
-    assert!(max_z >= 15.5 && max_z <= 16.5, "embossed text top should be ~16, got {max_z}");
+    assert!((9.8..=10.5).contains(&min_z), "embossed text baseline should be ~10, got {min_z}");
+    assert!((15.5..=16.5).contains(&max_z), "embossed text top should be ~16, got {max_z}");
 
     // Also test deboss
     let mut s2 = Session::default();

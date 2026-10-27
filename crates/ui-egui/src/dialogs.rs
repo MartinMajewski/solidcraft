@@ -134,7 +134,8 @@ crate::dialog_descriptor::dialog_descriptors! {
             FeatureKind::Pipe { diameter, wall, operation, .. }) {
             diameter: String = "5 mm".into() => diameter.to_string(),
             wall: String = String::new() => wall.as_deref().map(str::to_string).unwrap_or_default(),
-        } => json!({"diameter": diameter});
+            operation: usize = 0 => op_index(operation),
+        } => json!({"diameter": diameter, "operation": OPS.get(*operation).copied().unwrap_or("new")});
         Emboss("solid.emboss", "EMBOSS", [("Profiles", PROFILES, true), ("Target Face", FACES, true)],
             FeatureKind::Emboss { depth, deboss, .. }) {
             depth: String = "1 mm".into() => depth.to_string(),
