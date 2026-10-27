@@ -39,14 +39,17 @@ pub(crate) use face::{FaceRefForm, face_ref_form};
 pub(crate) use features::profiles as feature_profiles;
 pub(crate) use features::{EdgeRefForm, edge_ref_form, sketch_key};
 pub use features::{auto_operation, extrude_reach};
+pub use sketch_import::drawing_import_command;
 pub use sketch_modify::{extend_arc_preview, extend_preview, trim_piece};
 pub use view_dxf::sketch::exportable as view_dxf_exportable;
 pub use view_navigation::standard_view;
 mod component_link;
+pub use component_link::resolve_design_links;
 mod config;
+mod design_link;
 mod file;
 mod frame;
-mod inspect;
+pub(crate) mod inspect;
 mod interference;
 pub(crate) mod joints;
 mod libraries;
@@ -75,6 +78,7 @@ mod silhouette;
 mod sketch;
 pub(crate) use sketch::author_path_for_rebind;
 pub(crate) use sketch::created as sketch_created;
+mod canvas_sketch;
 mod sketch_3d;
 mod sketch_canvas;
 pub mod sketch_clipboard;
@@ -214,12 +218,16 @@ impl CommandSpec {
     }
     pub fn info(&self, s: &Session) -> CommandInfo {
         let e = (self.enabled)(s);
+        let (label, icon) = match self.id {
+            "inspect.colored_components" if s.colored_components.is_some() => ("Disable Component Colors", "colored_components_off"),
+            _ => (self.label, self.icon),
+        };
         CommandInfo {
             id: self.id,
-            label: self.label,
+            label,
             tab: self.tab,
             panel: self.panel,
-            icon: self.icon,
+            icon,
             shortcut: self.shortcut,
             params: self.params,
             enabled: e.is_ok(),
@@ -268,6 +276,7 @@ pub fn command_specs() -> Vec<&'static CommandSpec> {
     v.extend(sketch_inspect::COMMANDS.iter());
     v.extend(sketch_ends::COMMANDS.iter());
     v.extend(sketch_canvas::COMMANDS.iter());
+    v.extend(canvas_sketch::COMMANDS.iter());
     v.extend(sketch_3d::COMMANDS.iter());
     v.extend(surface_analysis::COMMANDS.iter());
     v.extend(surface_boundary::COMMANDS.iter());

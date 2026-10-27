@@ -45,8 +45,23 @@ fn typed_line_angle_survives_quadrants_move_reopen_and_one_undo() {
     let mut reopened = Session { doc: std::sync::Arc::new(doc), active_sketch: s.active_sketch, ..Session::default() };
     reopened.refresh();
     close(measure(&reopened, |k| matches!(k, ConstraintKind::LineAngle { .. })), 90f64.to_radians());
-    run(&mut reopened, "sketch.move", json!({"entities":out["curves"],"translate":[4,3],"angle":20}));
-    close(measure(&reopened, |k| matches!(k, ConstraintKind::LineAngle { .. })), 90f64.to_radians());
+    let before_move = reopened.doc.clone();
+    for rotate_constraints in [false, true] {
+        reopened.doc = before_move.clone();
+        reopened.refresh();
+        let result =
+            run(&mut reopened, "sketch.move", json!({"entities":out["curves"],"translate":[4,3],"angle":20,"rotate_constraints":rotate_constraints}));
+        assert_eq!(result["sketch"]["solved"], true);
+        let expected = if rotate_constraints { 110.0_f64 } else { 90.0 };
+        close(measure(&reopened, |k| matches!(k, ConstraintKind::LineAngle { .. })), expected.to_radians());
+        close(measure(&reopened, |k| matches!(k, ConstraintKind::Length { .. })), 10.0);
+        assert_eq!(reopened.doc.param("heading").unwrap().expr, "90 deg");
+        let sk = sketch(&reopened);
+        let c = sk.constraints.iter().find(|c| matches!(c.kind, ConstraintKind::LineAngle { .. })).unwrap();
+        assert_eq!(reopened.doc.param(c.param.as_deref().unwrap()).unwrap().expr, if rotate_constraints { "(heading) + 20 deg" } else { "heading" });
+        run(&mut reopened, "edit.undo", json!({}));
+        close(measure(&reopened, |k| matches!(k, ConstraintKind::LineAngle { .. })), 90f64.to_radians());
+    }
     let mut atomic = session();
     draw(&mut atomic, "sketch.line", json!({"points":[[0,0],[5,5]]}), json!({"length":10,"angle":45}));
     run(&mut atomic, "edit.undo", json!({}));
@@ -165,6 +180,26 @@ fn invalid_dimensioned_shapes_are_atomic_including_late_constraint_failure() {
     }
     assert_eq!(before["features"].as_array().unwrap().len(), 1);
     assert!(s.undo.len() >= history);
+}
+
+#[test]
+fn a_dimensioned_midpoint_line_carries_its_length_and_angle() {
+    let mut s = session();
+    let out = draw(&mut s, "sketch.line.midpoint", json!({"mid":[0,0],"end":[10,0]}), json!({"length":20,"angle":0}));
+    assert_eq!(out["curves"].as_array().map(|c| c.len()), Some(1), "{out}");
+    close(measure(&s, |k| matches!(k, ConstraintKind::Length { .. })), 20.0);
+    close(measure(&s, |k| matches!(k, ConstraintKind::LineAngle { .. })), 0.0);
+    let sk = sketch(&s);
+    let line = sk.curve_index(out["curves"][0].as_str().unwrap()).unwrap();
+    let solidcraft_sketch::CurveKind::Line { a, b } = sk.curves[line].kind else { panic!("a line") };
+    // The clicked middle is the line's middle.
+    close((sk.points[a].pos.x + sk.points[b].pos.x) * 0.5, 0.0);
+    close((sk.points[a].pos.y + sk.points[b].pos.y) * 0.5, 0.0);
+    assert!(
+        sk.constraints.iter().any(|c| matches!(c.kind, ConstraintKind::Midpoint { l, .. } if l == line)),
+        "the middle is constrained: {:?}",
+        sk.constraints
+    );
 }
 
 #[test]

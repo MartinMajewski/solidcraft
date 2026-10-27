@@ -31,9 +31,19 @@ applies what you typed, and **Up/Down** picks one of them first. A unit right af
 (`10 mm`) is left alone; anywhere else a unit is a prefix like any other, so `rad` followed by
 **Enter** gives `radius`.
 
+With **Preferences › Design › Step values with the arrow keys and the wheel** on (it is off
+by default) and no suggestions open, **Up/Down** step a plain number in any value field (a dialog's rows,
+the value box beside the geometry, a sketch dimension, a parameter's expression) by 1 in the
+unit it is written in: `20 mm` becomes `21 mm`, `2,5 mm` becomes `3,5 mm`. Hold **Shift** for 10
+or **Alt/Option** for 0.1. The mouse wheel over the focused field does the same, a step a notch,
+and the preview follows each step. An expression such as `width / 2` is left as typed.
+
 Expressions are unit-aware: `2 * width + 5 mm`, `angle / 2`, `sqrt(area)`, `1 in + 3 mm`, using
 `+ - * / ^`, parentheses, `sin cos tan asin acos atan atan2 sqrt abs min max floor ceil round mod
-trunc` and unit conversion. A decimal comma works too, outside parentheses: `2,5 mm` is
+trunc` and unit conversion. A number and the unit after it are one value: `10 mm / 2 mm` is 5
+and `90 deg / 1 rad` is π/2, and a fraction of numbers before a unit is one value too (`1/2 in`
+is half an inch; after a `/` only written without spaces: `1 in / 1/2 in` is 2, while
+`width / 10 / 2 mm` divides by 10 and then by 2 mm). A decimal comma works too, outside parentheses: `2,5 mm` is
 `2.5 mm` (inside a function's parentheses the comma separates its arguments, so write
 `max(2.5, 3)` there). A mixed number is one value, as imperial sizes are written: `2 1/8"` and
 `3 7/16 in` are 2.125 in and 3.4375 in (a whole number, a space, then a proper fraction of whole
@@ -43,13 +53,18 @@ parameter updates every expression, dimension and feature input that uses it, an
 in use can't be deleted (the error lists its users).
 
 The design's units (Document Settings in the browser: mm, cm, m, in or ft) set how a bare number
-typed into a feature is read. In an inch design `2` means 2 in. The Box, Cylinder, Sphere, Torus
-and Coil dialogs start with their sizes in the design's units, unit shown (`20 mm`, `20 in`).
-Changing the units never moves existing geometry. A size worked out from a bare number keeps
-the unit the number was given in: a sphere with a bare diameter of 20 has the radius
-`(20 mm) / 2` in a millimetre design. Beside a unit-less expression such as `2 * 5` or a
-unit-less parameter, which is read in the design's units, the number stays bare and is read
-with it.
+or unitless arithmetic expression typed into a length field is read. In an inch design `0.25`
+and `1 / 4` mean 0.25 in. Operation dialogs start with lengths in the design's units, including
+secondary distances, wall thicknesses, gaps, offsets and radii. Canvas handles and live sketch
+values use the same units as the operation. Angles, counts and scale factors keep their own
+units. Preferences selects the default units for new designs; existing designs use their own
+Document Settings.
+
+Explicit units override that choice: `2 mm` is still two millimetres in an inch design.
+Parameter expressions such as `width / 2` remain driving expressions. Editing a saved feature
+preserves its physical size; an existing millimetre expression can still show `mm` so accepting
+an unchanged field cannot reinterpret it. Computed sizes and tolerances keep their full
+precision when written back into editable fields, independently of display precision.
 
 Parameters export to and import from CSV or JSON (`parameters.export`, `parameters.import`).
 **Configurations** (`config.*`) keep a table of rows, each with its own parameter values and

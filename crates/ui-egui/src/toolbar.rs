@@ -329,9 +329,7 @@ pub fn app_bar(app: &mut SolveApp, ui: &mut egui::Ui) {
         // While a file loads the design waits: no menus or commands from the bar.
         // The File menu: a text button (New, Open, Save, Save As, Export…). Its handle keeps the
         // old `appbar:folder` name too, for scripts written against the folder button.
-        let file = if app.native_file_menu {
-            false
-        } else {
+        let file = {
             let label = app.tr("ui.file").to_string();
             let galley = ui.painter().layout_no_wrap(label.clone(), FontId::proportional(t.font_button), t.app_bar_text);
             let br = Rect::from_min_size(pos2(x - 13.0, r.center().y - 13.0), vec2(galley.size().x + 16.0, 26.0));
@@ -377,7 +375,7 @@ pub fn app_bar(app: &mut SolveApp, ui: &mut egui::Ui) {
         }
         x += step;
         // Narrow windows retain Save; Undo and Redo remain available from their shortcuts and menus.
-        if !compact_actions && !app.native_file_menu {
+        if !compact_actions {
             if click(ui, x, "undo", &undo_tip, shown) {
                 FileAction::Undo.run(app);
             }
@@ -409,7 +407,7 @@ pub fn app_bar(app: &mut SolveApp, ui: &mut egui::Ui) {
         let label_width = ui.painter().layout_no_wrap(report_text.to_string(), report_font.clone(), t.app_bar_text).size().x;
         let (report, report_label) = report_rect(r, captions, tabs_start, label_width);
         // Assistant, Settings, Help and Report a bug form the right-hand cluster.
-        if !app.native_file_menu && click(ui, help_x(report), "help", app.tr("ui.help"), true) {
+        if click(ui, help_x(report), "help", app.tr("ui.help"), true) {
             app.help.menu = !app.help.menu;
             let at = help_x(report);
             ui.ctx().data_mut(|d| {
@@ -419,7 +417,7 @@ pub fn app_bar(app: &mut SolveApp, ui: &mut egui::Ui) {
         }
         // A newer release: its Update button stays before the right cluster, in the space up to
         // the bar's own file actions on the left.
-        let controls_left = if app.native_file_menu { r.right() - captions - 12.0 } else { report.left() - CLUSTER_BUTTONS };
+        let controls_left = report.left() - CLUSTER_BUTTONS;
         let span = Rect::from_min_max(pos2(x, report.top()), pos2(controls_left - 2.0, report.bottom()));
         let update_labeled = report_label;
         let update = crate::update::button(app, ui, span, update_labeled);
@@ -430,70 +428,58 @@ pub fn app_bar(app: &mut SolveApp, ui: &mut egui::Ui) {
         let mut tabs_ui = ui.new_child(egui::UiBuilder::new().max_rect(tabs_rect));
         tabs_ui.set_clip_rect(tabs_rect.intersect(ui.clip_rect()));
         crate::documents::tabs(app, &mut tabs_ui, r, tabs_start, tabs_end);
-        if !app.native_file_menu {
-            let response = ui.interact(report, ui.id().with("sc_report_button"), Sense::click());
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), report_text));
-            crate::scenario::publish_target("titlebar:report", report);
-            ui.painter().rect_filled(
-                report,
-                t.radius_sm,
-                if response.hovered() || response.has_focus() { t.app_bar_hover_button } else { t.app_bar },
+        let response = ui.interact(report, ui.id().with("sc_report_button"), Sense::click());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), report_text));
+        crate::scenario::publish_target("titlebar:report", report);
+        ui.painter().rect_filled(report, t.radius_sm, if response.hovered() || response.has_focus() { t.app_bar_hover_button } else { t.app_bar });
+        ui.painter().rect_stroke(report, t.radius_sm, Stroke::new(1.0, t.app_bar_separator), egui::StrokeKind::Inside);
+        let icon = Rect::from_center_size(pos2(report.left() + 14.0, report.center().y), vec2(18.0, 18.0));
+        icons::paint_app_bar(ui.painter(), icon, "bug_report", 1.0);
+        if report_label {
+            ui.painter().text(pos2(report.left() + REPORT_TEXT_X, report.center().y), Align2::LEFT_CENTER, report_text, report_font, t.app_bar_text);
+        }
+        if response.on_hover_text(crate::i18n::tr_label("Report a bug — review a screenshot and open a GitHub draft")).clicked() {
+            crate::help::run(app, &ui.ctx().clone(), "report");
+        }
+        // Settings sits immediately left of Help (also Ctrl+,).
+        let gear = Rect::from_center_size(pos2(report.left() - 52.0, r.center().y), vec2(32.0, 32.0));
+        let gresp = ui.interact(gear, ui.id().with("sc_prefs_button"), Sense::click());
+        if gresp.hovered() || gresp.has_focus() {
+            ui.painter().rect_filled(gear.shrink(3.0), t.radius_sm, t.app_bar_hover_button);
+        }
+        icons::paint_app_bar(ui.painter(), gear.shrink(7.0), "settings", 1.0);
+        crate::scenario::publish_rect("titlebar:preferences", gear);
+        if crate::agent_chat::app_bar_button_shown(app) {
+            assistant_button(app, ui, Rect::from_center_size(pos2(report.left() - 86.0, r.center().y), vec2(32.0, 32.0)));
+        }
+        crate::scenario::publish_handle("titlebar:preferences", gear.center());
+        let prefs_tip = if cfg!(target_os = "macos") {
+            format!("{} (Cmd+,)", app.tr("ui.preferences"))
+        } else {
+            format!("{} (Ctrl+,)", app.tr("ui.preferences"))
+        };
+        if gresp.on_hover_text(prefs_tip).clicked() {
+            crate::prefs::open_at(app, 0);
+        }
+        if r.width() >= 640.0 {
+            // The version links to its release notes.
+            let galley =
+                ui.painter().layout_no_wrap(format!("v{}", crate::update::current_version()), FontId::proportional(t.font_small), t.app_bar_text);
+            let vrect = Align2::RIGHT_CENTER.anchor_size(pos2(r.right() - 12.0 - captions, r.center().y), galley.size());
+            let vresp = ui.interact(
+                vrect.expand2(vec2(2.0, 4.0)).intersect(Rect::everything_right_of(report.right())),
+                ui.id().with("sc_version_link"),
+                Sense::click(),
             );
-            ui.painter().rect_stroke(report, t.radius_sm, Stroke::new(1.0, t.app_bar_separator), egui::StrokeKind::Inside);
-            let icon = Rect::from_center_size(pos2(report.left() + 14.0, report.center().y), vec2(18.0, 18.0));
-            icons::paint_app_bar(ui.painter(), icon, "bug_report", 1.0);
-            if report_label {
-                ui.painter().text(
-                    pos2(report.left() + REPORT_TEXT_X, report.center().y),
-                    Align2::LEFT_CENTER,
-                    report_text,
-                    report_font,
-                    t.app_bar_text,
-                );
+            let url = crate::update::release_notes_url(crate::update::current_version(), crate::update::release_build());
+            let vresp = vresp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(&url);
+            if vresp.hovered() || vresp.has_focus() {
+                ui.painter().hline(vrect.x_range(), vrect.bottom(), Stroke::new(1.0, t.app_bar_text));
             }
-            if response.on_hover_text(crate::i18n::tr_label("Report a bug — review a screenshot and open a GitHub draft")).clicked() {
-                crate::help::run(app, &ui.ctx().clone(), "report");
-            }
-            // Settings sits immediately left of Help (also Ctrl+,).
-            let gear = Rect::from_center_size(pos2(report.left() - 52.0, r.center().y), vec2(32.0, 32.0));
-            let gresp = ui.interact(gear, ui.id().with("sc_prefs_button"), Sense::click());
-            if gresp.hovered() || gresp.has_focus() {
-                ui.painter().rect_filled(gear.shrink(3.0), t.radius_sm, t.app_bar_hover_button);
-            }
-            icons::paint_app_bar(ui.painter(), gear.shrink(7.0), "settings", 1.0);
-            crate::scenario::publish_rect("titlebar:preferences", gear);
-            if crate::agent_chat::app_bar_button_shown(app) {
-                assistant_button(app, ui, Rect::from_center_size(pos2(report.left() - 86.0, r.center().y), vec2(32.0, 32.0)));
-            }
-            crate::scenario::publish_handle("titlebar:preferences", gear.center());
-            let prefs_tip = if cfg!(target_os = "macos") {
-                format!("{} (Cmd+,)", app.tr("ui.preferences"))
-            } else {
-                format!("{} (Ctrl+,)", app.tr("ui.preferences"))
-            };
-            if gresp.on_hover_text(prefs_tip).clicked() {
-                crate::prefs::open_at(app, 0);
-            }
-            if r.width() >= 640.0 {
-                // The version links to its release notes.
-                let galley =
-                    ui.painter().layout_no_wrap(format!("v{}", crate::update::current_version()), FontId::proportional(t.font_small), t.app_bar_text);
-                let vrect = Align2::RIGHT_CENTER.anchor_size(pos2(r.right() - 12.0 - captions, r.center().y), galley.size());
-                let vresp = ui.interact(
-                    vrect.expand2(vec2(2.0, 4.0)).intersect(Rect::everything_right_of(report.right())),
-                    ui.id().with("sc_version_link"),
-                    Sense::click(),
-                );
-                let url = crate::update::release_notes_url(crate::update::current_version(), crate::update::release_build());
-                let vresp = vresp.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(&url);
-                if vresp.hovered() || vresp.has_focus() {
-                    ui.painter().hline(vrect.x_range(), vrect.bottom(), Stroke::new(1.0, t.app_bar_text));
-                }
-                ui.painter().galley(vrect.min, galley, t.app_bar_text);
-                crate::scenario::publish_handle("titlebar:version", vrect.center());
-                if vresp.clicked() {
-                    ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-                }
+            ui.painter().galley(vrect.min, galley, t.app_bar_text);
+            crate::scenario::publish_handle("titlebar:version", vrect.center());
+            if vresp.clicked() {
+                ui.ctx().open_url(egui::OpenUrl::new_tab(url));
             }
         }
         if app.custom_titlebar {
@@ -595,10 +581,6 @@ impl FileAction {
 
 fn file_menu(app: &mut SolveApp, ctx: &egui::Context) {
     let id = egui::Id::new("sc_file_menu");
-    if app.native_file_menu {
-        ctx.data_mut(|data| data.insert_temp(id, false));
-        return;
-    }
     if !ctx.data(|d| d.get_temp::<bool>(id).unwrap_or(false)) {
         return;
     }
@@ -660,7 +642,9 @@ fn file_menu(app: &mut SolveApp, ctx: &egui::Context) {
                     FileAction::Save.run(app);
                     close = true;
                 }
-                if item_if(ui, &format!("{}…", app.tr("ui.save_as")), "", "save", shown) {
+                // Save As shows the shortcut of the command it runs, from the app's own registry.
+                let save_as_key = crate::keymap::effective(app, "file.save_as").unwrap_or_default();
+                if item_if(ui, &format!("{}…", app.tr("ui.save_as")), &save_as_key, "save", shown) {
                     FileAction::SaveAs.run(app);
                     close = true;
                 }
@@ -686,6 +670,10 @@ fn file_menu(app: &mut SolveApp, ctx: &egui::Context) {
                 }
                 if item_if(ui, "Export 3MF…", "", "mesh_export", shown) {
                     FileAction::ExportMesh("3mf").run(app);
+                    close = true;
+                }
+                if item_if(ui, "Send to Slicer", "", "mesh_export", shown && crate::dialogs_save_mesh::available(app)) {
+                    app.start("file.send_to_slicer");
                     close = true;
                 }
                 if item_if(ui, "Export STEP…", "", "export", shown) {
@@ -755,7 +743,10 @@ pub fn save(app: &mut SolveApp) {
         return;
     }
     if app.session.path.is_some() {
-        crate::save_job::start(app, "file.save", json!({}));
+        // Read-only, or changed on disk since it was opened: Save As, or a question, instead.
+        if crate::open_elsewhere::check_save(app) {
+            crate::save_job::start(app, "file.save", json!({}));
+        }
     } else {
         save_as(app);
     }
@@ -765,8 +756,19 @@ pub(crate) fn save_as(app: &mut SolveApp) {
     save_as_with_extension(app, solidcraft_engine::io::DESIGN_EXT);
 }
 
+/// Save As offering a copy's name ("Bracket copy"), so the file it is a copy of is kept.
+pub(crate) fn save_copy(app: &mut SolveApp) {
+    let name = crate::i18n::format("document.copy_name", &[("name", &app.session.doc.name)]);
+    save_as_named(app, &name, solidcraft_engine::io::DESIGN_EXT);
+}
+
 fn save_as_with_extension(app: &mut SolveApp, extension: &str) {
-    let name = format!("{}.{extension}", app.session.doc.name);
+    let name = app.session.doc.name.clone();
+    save_as_named(app, &name, extension);
+}
+
+fn save_as_named(app: &mut SolveApp, name: &str, extension: &str) {
+    let name = format!("{name}.{extension}");
     app.pick_save(&name, &[solidcraft_engine::io::DESIGN_EXT, "json"], |app, path| {
         // A save under way answers a closing tab when it ends.
         if let Some(path) = path
@@ -816,15 +818,23 @@ fn export_as(app: &mut SolveApp, ext: &str, format: Option<&str>) {
 /// Unicode character boundaries. An oversized word stays on one line with an ellipsis.
 fn ribbon_button_lines(painter: &egui::Painter, label: &str, width: f32) -> Vec<String> {
     let mut lines = ribbon_label_lines(painter, label, width);
+    // Right-to-left labels come in display order (see `bidi`): a line reads from its right end,
+    // so a shortened line loses characters on the left, where the ellipsis then goes.
+    let rtl = crate::bidi::has_rtl(label);
     for line in &mut lines {
         if ribbon_label_width(painter, line) > width {
             while !line.is_empty() {
-                line.pop();
-                if ribbon_label_width(painter, &format!("{}…", line.trim_end())) <= width {
+                if rtl {
+                    line.remove(0);
+                } else {
+                    line.pop();
+                }
+                let shortened = if rtl { format!("…{}", line.trim_start()) } else { format!("{}…", line.trim_end()) };
+                if ribbon_label_width(painter, &shortened) <= width {
                     break;
                 }
             }
-            *line = format!("{}…", line.trim_end());
+            *line = if rtl { format!("…{}", line.trim_start()) } else { format!("{}…", line.trim_end()) };
         }
     }
     lines
@@ -849,6 +859,27 @@ fn ribbon_label_lines(painter: &egui::Painter, label: &str, width: f32) -> Vec<S
     let measure = |text: &str| ribbon_label_width(painter, text);
     let normalized = label.split_whitespace().collect::<Vec<_>>().join(" ");
     let label = normalized.as_str();
+    if crate::bidi::has_rtl(label) {
+        // Display-order right-to-left text reads from its end: the first line takes the words
+        // at the end of the string, the second line the words before them.
+        let breaks = label.char_indices().filter(|(_, c)| c.is_whitespace() || *c == '/').map(|(at, c)| at + c.len_utf8());
+        let mut start = label.len();
+        for cut in std::iter::once(0).chain(breaks).collect::<Vec<_>>().into_iter().rev() {
+            if cut >= start {
+                continue;
+            }
+            if start < label.len() && measure(label.get(cut..).unwrap_or_default().trim()) > width {
+                break;
+            }
+            start = cut;
+        }
+        let (rest, first) = label.split_at(start);
+        let mut lines = vec![first.trim().to_owned()];
+        if !rest.trim().is_empty() {
+            lines.push(rest.trim().to_owned());
+        }
+        return lines;
+    }
     let mut end = 0;
     for token in label.split_inclusive(|c: char| c.is_whitespace() || c == '/') {
         let next = end + token.len();
@@ -900,8 +931,9 @@ fn ribbon_text(ui: &egui::Ui, at: egui::Pos2, text: &str, size: f32, color: Colo
 }
 
 /// SKETCH while editing a sketch and SHEET METAL while a sheet body is active take the contextual
-/// tab style; SHEET METAL is an ordinary tab otherwise.
-fn contextual_tab(app: &SolveApp, tab: &str) -> bool {
+/// tab style; SHEET METAL is an ordinary tab otherwise. WELDMENTS selects itself on a frame member
+/// but keeps the ordinary tab look, as MODEL has when selected.
+pub(crate) fn contextual_tab(app: &SolveApp, tab: &str) -> bool {
     tab == "SKETCH" || (tab == "SHEET METAL" && crate::workspace::sheet_body(app).is_some())
 }
 
@@ -1232,10 +1264,11 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
                     painter.rect_filled(br, t.radius_sm, t.hover);
                 }
                 if let Some(c) = shown.first().or(cmds.first()) {
+                    let info = c.info(&app.session);
                     icons::paint_icon(
                         &painter,
                         Rect::from_center_size(br.center() - vec2(0.0, 3.0), vec2(26.0, 26.0)),
-                        c.icon,
+                        info.icon,
                         f32::from(t.icon.a()) / 255.0,
                     );
                 }
@@ -1295,16 +1328,16 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
                 } else if resp.hovered() && info.enabled {
                     painter.rect_filled(whole, t.radius_sm, t.hover);
                 }
-                let icon = if selected.id == "sketch.finish" { "finish" } else { selected.icon };
+                let icon = if selected.id == "sketch.finish" { "finish" } else { info.icon };
                 let side = if finish { 30.0 } else { 26.0 };
                 let icon_rect =
                     Rect::from_center_size(pos2(br.center().x, whole.top() + if labels { 16.0 } else { button_height / 2.0 }), vec2(side, side));
                 icons::paint_icon(&painter, icon_rect, icon, if info.enabled { 1.0 } else { 0.35 });
-                let tr_label = app.tr_label(selected.label).to_string();
+                let tr_label = app.tr_label(info.label).to_string();
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled() && info.enabled, &tr_label));
                 if ribbon_tooltip(app, resp, selected, info.disabled_reason.as_deref()).clicked() && info.enabled {
                     let id = selected.id;
-                    app.start_pinned(id);
+                    app.start_pinned(id, Some(whole));
                 }
                 if let Some(f) = family {
                     let ar = if labels {
@@ -1333,7 +1366,8 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
                         sketch_menu_rows(app, ui, &variants, &mut menu, &mut toggle);
                     });
                 } else if labels {
-                    let label = app.tr_label(crate::workspace::ribbon_button_label(selected));
+                    let button_label = crate::workspace::ribbon_button_label(selected);
+                    let label = app.tr_label(if button_label == selected.label { info.label } else { button_label });
                     let color = if info.enabled { t.text } else { t.text_dim };
                     let galley = ribbon_button_galley(&painter, label, whole.width() - BUTTON_LABEL_PADDING, color);
                     painter.galley(pos2(whole.center().x, whole.top() + 32.0), galley, t.text);
@@ -1396,7 +1430,7 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
                         menu = Some((resp.interact_pointer_pos().unwrap_or(cell.left_bottom()), c.id));
                     }
                     if ribbon_tooltip(app, resp, c, info.disabled_reason.as_deref()).clicked() && info.enabled {
-                        app.start(c.id);
+                        app.start_at(c.id, Some(cell));
                     }
                 }
             }
@@ -1517,8 +1551,8 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
                                         RowAction::None => {}
                                         RowAction::Menu(at) => menu = Some((at, c.id)),
                                         RowAction::TogglePin => toggle = Some(c.id),
-                                        RowAction::Start => {
-                                            app.start(c.id);
+                                        RowAction::Start(rect) => {
+                                            app.start_at(c.id, Some(rect));
                                             ui.ctx().data_mut(|d| d.remove::<egui::Id>(egui::Id::new("sc_panel_open")));
                                         }
                                     }
@@ -1558,14 +1592,14 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
                                 let response = crate::ui_kit::command_menu_button(
                                     ui,
                                     c.id,
-                                    c.label,
-                                    c.icon,
+                                    info.label,
+                                    info.icon,
                                     &crate::keymap::display_for(app, c.id).unwrap_or_default(),
                                     info.enabled,
                                 );
                                 crate::scenario::publish_handle(&format!("toolbar:{}", c.id), response.rect.center());
                                 if response.clicked() {
-                                    app.start(c.id);
+                                    app.start_at(c.id, Some(response.rect));
                                     ui.close();
                                 }
                             }
@@ -1584,7 +1618,7 @@ pub fn toolbar(app: &mut SolveApp, ui: &mut egui::Ui) {
         let leaves = |p: egui::Pos2| !r.contains(p) || over_popup(p);
         if let (Some(d), Some(p)) = (egui::DragAndDrop::payload::<ToolbarDrag>(ui.ctx()), pointer) {
             let removing = !d.from_menu && leaves(p);
-            drag_ghost(ui.ctx(), d.id, p, removing);
+            drag_ghost(app, ui.ctx(), d.id, p, removing);
             if ui.input(|i| i.pointer.any_released()) && drop.is_none() {
                 egui::DragAndDrop::clear_payload(ui.ctx());
                 if removing {
@@ -1648,7 +1682,7 @@ fn assistant_button(app: &mut SolveApp, ui: &mut egui::Ui, at: Rect) {
 /// What a click on a panel drop-down row asks for.
 enum RowAction {
     None,
-    Start,
+    Start(Rect),
     Menu(egui::Pos2),
     TogglePin,
 }
@@ -1662,7 +1696,7 @@ const CONSTRAINT_GRID_WIDTH: f32 = 82.0;
 fn ribbon_tooltip(app: &SolveApp, response: egui::Response, command: &solidcraft_engine::CommandSpec, disabled: Option<&str>) -> egui::Response {
     response.on_hover_ui(|ui| {
         let t = Tokens::get();
-        let name = app.tr_label(command.label);
+        let name = app.tr_label(command.info(&app.session).label);
         let name_width =
             ui.painter().layout_no_wrap(name.to_string(), crate::fonts::semibold(crate::theme::Tokens::get().font_heading), t.text).size().x;
         let key_width = crate::keymap::display_for(app, command.id)
@@ -1690,6 +1724,8 @@ fn ribbon_tooltip(app: &SolveApp, response: egui::Response, command: &solidcraft
         let description = match command.id {
             "render.scene" => Some(app.tr("render.preview_help")),
             "render.start" => Some(app.tr("render.image_help")),
+            // Sending again replaces the file the slicer has open.
+            "file.send_to_slicer" => Some(app.tr("ui.slicer_resend_hint")),
             "render.preset.resolve" | "render.preset.apply" => Some(app.tr("render.ribbon_studios_help")),
             "render.library.appearance.apply" | "render.library.surface.bind" => Some(app.tr("render.ribbon_materials_help")),
             "render.library.studio.prepare" | "render.library.studio.apply" => Some(app.tr("render.ribbon_lights_help")),
@@ -1746,7 +1782,7 @@ fn dropdown_width(app: &SolveApp, ui: &egui::Ui, cmds: &[&'static solidcraft_eng
     let font = FontId::proportional(t.font_button);
     cmds.iter()
         .map(|c| {
-            let label = ui.painter().layout_no_wrap(app.tr_label(c.label).to_string(), font.clone(), t.text).size().x;
+            let label = ui.painter().layout_no_wrap(app.tr_label(c.info(&app.session).label).to_string(), font.clone(), t.text).size().x;
             let key = crate::keymap::display_for(app, c.id)
                 .map(|k| ui.painter().layout_no_wrap(k.to_string(), FontId::monospace(t.font_button), t.text).size().x + 24.0)
                 .unwrap_or(0.0);
@@ -1776,12 +1812,12 @@ fn dropdown_row(app: &SolveApp, ui: &mut egui::Ui, c: &'static solidcraft_engine
     let pr = Rect::from_center_size(pos2(rect.right() - 13.0, rect.center().y), vec2(20.0, 20.0));
     let pin = ui.interact(pr, ui.id().with(("dropdown_pin", c.id)), Sense::click());
     let pointer_on = (resp.hovered() || pin.hovered()) && !egui::DragAndDrop::has_any_payload(ui.ctx());
-    let label = app.tr_label(c.label).to_string();
+    let label = app.tr_label(info.label).to_string();
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled() && info.enabled, &label));
     crate::scenario::publish_handle(&format!("toolbar:{}", c.id), rect.center());
     crate::scenario::publish_handle(&format!("dropdown:{}", c.id), rect.center());
     let hot = info.enabled && (pointer_on || resp.has_focus());
-    let mut row = crate::ui_kit::MenuItem::new(c.id, &label, c.icon);
+    let mut row = crate::ui_kit::MenuItem::new(c.id, &label, info.icon);
     row.enabled = info.enabled;
     row.highlighted = hot;
     let shortcut = crate::keymap::display_for(app, c.id).unwrap_or_default();
@@ -1804,7 +1840,7 @@ fn dropdown_row(app: &SolveApp, ui: &mut egui::Ui, c: &'static solidcraft_engine
     }
     // A disabled row says why; a documented command also shows its help (#2758).
     let reason = info.disabled_reason.as_deref().filter(|_| !info.enabled);
-    let resp = match crate::command_help::row_tip(c.id, &label, c.shortcut, reason) {
+    let resp = match crate::command_help::row_tip(c.id, &label, Some(shortcut.as_str()).filter(|k| !k.is_empty()), reason) {
         Some(tip) => crate::command_help::tooltip(resp, c.id, tip),
         None => resp,
     };
@@ -1812,7 +1848,7 @@ fn dropdown_row(app: &SolveApp, ui: &mut egui::Ui, c: &'static solidcraft_engine
         return RowAction::Menu(resp.interact_pointer_pos().unwrap_or(rect.left_bottom()));
     }
     if resp.clicked() && info.enabled {
-        return RowAction::Start;
+        return RowAction::Start(rect);
     }
     RowAction::None
 }
@@ -1896,8 +1932,8 @@ fn sketch_menu_rows(
             RowAction::None => {}
             RowAction::Menu(at) => *menu = Some((at, c.id)),
             RowAction::TogglePin => *toggle = Some(c.id),
-            RowAction::Start => {
-                app.start(c.id);
+            RowAction::Start(rect) => {
+                app.start_at(c.id, Some(rect));
                 ui.ctx().data_mut(|d| d.remove::<egui::Id>(egui::Id::new("sc_panel_open")));
                 ui.close();
             }
@@ -1913,13 +1949,14 @@ struct ToolbarDrag {
 }
 
 /// The dragged command's icon under the pointer, crossed out when releasing removes it.
-fn drag_ghost(ctx: &egui::Context, id: &str, at: egui::Pos2, removing: bool) {
+fn drag_ghost(app: &SolveApp, ctx: &egui::Context, id: &str, at: egui::Pos2, removing: bool) {
     let t = Tokens::get();
     let Some(c) = solidcraft_engine::find_command(id) else { return };
     let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("sc_toolbar_drag")));
     let r = Rect::from_center_size(at + vec2(14.0, 16.0), vec2(30.0, 30.0));
     p.rect(r, t.radius_sm, t.toolbar.gamma_multiply(0.92), Stroke::new(1.0, if removing { t.error } else { t.accent }), egui::StrokeKind::Inside);
-    icons::paint_icon(&p, r.shrink(5.0), c.icon, f32::from(t.icon.a()) / 255.0);
+    let info = c.info(&app.session);
+    icons::paint_icon(&p, r.shrink(5.0), info.icon, f32::from(t.icon.a()) / 255.0);
     if removing {
         let s = Stroke::new(2.0, t.error);
         let x = Rect::from_center_size(r.right_top(), vec2(9.0, 9.0));
@@ -1997,7 +2034,12 @@ pub fn shortcuts(app: &mut SolveApp, ctx: &egui::Context) {
     }
     // A dimension value that is taking the keyboard: letters belong to it (a parameter name
     // starting with L or D), even on the frame before its field holds the focus.
-    if egui::Popup::is_any_open(ctx) || ctx.egui_wants_keyboard_input() || crate::dim_view::editing() || crate::dialogs_save_mesh::popup_open(ctx) {
+    if egui::Popup::is_any_open(ctx)
+        || ctx.egui_wants_keyboard_input()
+        || crate::dim_view::editing()
+        || crate::dialogs_save_mesh::popup_open(ctx)
+        || crate::hole_presets::name_prompt_open(ctx, app.dialog.as_ref())
+    {
         return;
     }
     let (keys, mods) = ctx.input(|i| {
@@ -2013,7 +2055,7 @@ pub fn shortcuts(app: &mut SolveApp, ctx: &egui::Context) {
     if shown {
         crate::edit_clipboard::handle(app, ctx);
     } else {
-        crate::edit_clipboard::flush(ctx);
+        crate::edit_clipboard::flush(app, ctx);
     }
     for (k, repeat) in keys {
         use egui::Key;
@@ -2042,8 +2084,11 @@ pub fn shortcuts(app: &mut SolveApp, ctx: &egui::Context) {
                     }
                 }
                 Key::Y => drop(app.run("edit.redo", json!({}))),
-                // Copy, Cut and Paste (`edit_clipboard::handle`).
-                Key::C | Key::X | Key::V if !mods.shift && !mods.alt => {}
+                // Copy, Cut and Paste, and Paste New with Shift (`edit_clipboard::handle`).
+                Key::C | Key::X if !mods.shift && !mods.alt => {}
+                Key::V if !mods.alt => {}
+                // Ctrl+Shift+S is Save As; Ctrl+S keeps saving over the current file (#6558).
+                Key::S if mods.shift && !mods.alt => save_as(app),
                 Key::S => save(app),
                 _ => crate::keymap::press(app, &crate::keymap::key_name(k, mods), repeat),
             }
@@ -2091,9 +2136,10 @@ pub fn shortcuts(app: &mut SolveApp, ctx: &egui::Context) {
                     crate::select_other::close(app);
                 } else if app.tool.is_some() {
                     crate::tools::finish(app);
-                } else if app.dialog.is_some() {
+                } else if app.dialog.is_some() || app.pending_feature_edit.is_some() {
                     crate::dialogs::cancel(app);
                 } else if !app.session.selection.is_empty() || app.session.active_sketch.is_none() {
+                    crate::edit_clipboard::drop_cut(app);
                     app.tree.picked_joints.clear();
                     let _ = app.run("select.clear", json!({}));
                 }
@@ -2172,23 +2218,46 @@ mod header_report_tests {
     }
 
     #[test]
-    fn native_file_menu_replaces_window_button_and_preserves_fallback() {
+    fn native_file_menu_preserves_application_bar_controls() {
         let mut h = crate::scenario::Harness::new();
-        h.frames(3);
-        assert!(crate::scenario::handle_at("appbar:file").is_some());
-        h.ctx.data_mut(|data| data.insert_temp(egui::Id::new("sc_file_menu"), true));
-        h.app.native_file_menu = true;
-        h.frames(3);
-        assert!(crate::scenario::handle_at("appbar:file").is_none());
-        assert!(!h.ctx.data(|data| data.get_temp::<bool>(egui::Id::new("sc_file_menu")).unwrap_or(false)));
-        assert!(crate::scenario::handle_at("appbar:save").is_some());
-        assert!(crate::scenario::handle_at("appbar:undo").is_none());
-        assert!(crate::scenario::handle_at("appbar:redo").is_none());
-        h.app.native_file_menu = false;
-        h.frames(3);
-        assert!(crate::scenario::handle_at("appbar:file").is_some());
-        assert!(crate::scenario::handle_at("appbar:undo").is_some());
-        assert!(crate::scenario::handle_at("appbar:redo").is_some());
+        h.app.home.open = false;
+        h.app.run("solid.box", json!({"length":2,"width":3,"height":4})).unwrap();
+        for native in [false, true] {
+            h.app.native_file_menu = native;
+            h.app.integrated_titlebar = native;
+            h.frames(3);
+            for name in [
+                "appbar:file",
+                "appbar:save",
+                "appbar:undo",
+                "appbar:redo",
+                "appbar:help",
+                "titlebar:preferences",
+                "titlebar:assistant",
+                "titlebar:report",
+            ] {
+                assert!(crate::scenario::handle_at(name).is_some(), "native={native}: {name}");
+            }
+            let tabs = crate::scenario::rect_of("tab:design:0").unwrap();
+            let assistant = crate::scenario::rect_of("titlebar:assistant").unwrap();
+            assert!(tabs.right() < assistant.left(), "tabs leave room for the right controls");
+            let depth = h.app.session.undo.len();
+            h.step(&json!({"click":{"handle":"appbar:undo"}})).unwrap();
+            assert_eq!(h.app.session.undo.len(), depth - 1);
+            h.step(&json!({"click":{"handle":"appbar:redo"}})).unwrap();
+            assert_eq!(h.app.session.undo.len(), depth);
+            h.step(&json!({"click":{"handle":"appbar:file"}})).unwrap();
+            assert!(h.widget("Save As JSON…").is_some(), "the in-window File menu still opens");
+            h.step(&json!({"click":{"handle":"appbar:file"}})).unwrap();
+            assert!(!h.ctx.data(|data| data.get_temp::<bool>(egui::Id::new("sc_file_menu")).unwrap_or(false)));
+            h.step(&json!({"click":{"handle":"appbar:help"}})).unwrap();
+            assert!(h.app.help.menu);
+            h.step(&json!({"key":"Escape"})).unwrap();
+            h.step(&json!({"click":{"handle":"titlebar:assistant"}})).unwrap();
+            assert!(h.app.agent_chat.open);
+            h.step(&json!({"click":{"handle":"titlebar:assistant"}})).unwrap();
+            assert!(!h.app.agent_chat.open);
+        }
     }
 
     #[test]
@@ -2323,6 +2392,34 @@ mod header_report_tests {
         assert_eq!(got[0].0, "Plate.solidcraft");
         assert!(solidcraft_engine::io::is_design_container(&got[0].1));
         assert!(h.app.session.path.is_none(), "a download is no save: the design keeps no file");
+    }
+
+    /// Ctrl+Shift+S opens Save As in the design workspace (it never saves over the current file),
+    /// and the File menu shows that shortcut next to Save As (#6558).
+    #[test]
+    fn ctrl_shift_s_opens_save_as_in_the_workspace_and_the_file_menu_shows_the_shortcut() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.run("solid.box", json!({"length":2,"width":3,"height":4})).unwrap();
+        let source = h.dir.join("source.solidcraft");
+        h.app.run("file.save_as", json!({"path":source})).unwrap();
+        let bytes = std::fs::read(&source).unwrap();
+        h.app.session.doc_mut().name = "Copy".into();
+        h.frames(3);
+        h.step(&json!({"key":"S","cmd":true,"shift":true})).unwrap();
+        h.frames(3);
+        h.settle();
+        assert_eq!(
+            h.app.session.path.as_deref(),
+            h.dir.join("Copy.solidcraft").to_str(),
+            "Ctrl+Shift+S must open Save As, not save over the current file"
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), bytes, "Save As keeps the file the design came from");
+        // The File menu shows the shortcut of the command it runs.
+        let spec = solidcraft_engine::find_command("file.save_as").expect("file.save_as is a command");
+        assert_eq!(spec.shortcut, Some("Ctrl+Shift+S"), "the File menu shows the shortcut of Save As");
+        h.frames(3);
+        h.step(&json!({"click":{"handle":"appbar:file"}})).unwrap();
+        assert!(h.widget("Save As…").is_some(), "the File menu has a Save As row");
     }
 
     fn sizes(buttons: &[usize]) -> Vec<PanelSize> {
@@ -2945,6 +3042,21 @@ mod dropdown_toggle_tests {
         h.frames(2);
         assert!(rect_of("toolbar_dropdown").is_none(), "the second click closes it");
     }
+
+    /// A drop-down row's help tooltip names the key the command runs from now, not its default.
+    #[test]
+    fn a_drop_down_row_tooltip_names_a_rebound_key() {
+        let mut h = Harness::new();
+        h.app.home.open = false;
+        h.frames(3);
+        crate::keymap::bind(&mut h.app, "solid.shell", "Shift+J", false).unwrap();
+        h.step(&json!({"click": {"handle": "panel:MODEL:MODIFY"}})).unwrap();
+        h.frames(2);
+        h.step(&json!({"move": {"handle": "dropdown:solid.shell"}})).unwrap();
+        h.frames(40);
+        let shell = h.app.tr_label("Shell").to_string();
+        assert!(h.widget(&format!("{shell}  (Shift+J)")).is_some(), "the tooltip shows the new key");
+    }
 }
 
 #[cfg(test)]
@@ -3100,6 +3212,25 @@ mod ribbon_label_tests {
                         let galley = ribbon_button_galley(&painter, label, width, Color32::WHITE);
                         assert!(galley.rows.len() <= 2, "{}: {label}", command.id);
                         assert!(galley.size().x <= width + 0.01, "{}: {label}: {} > {width}", command.id, galley.size().x);
+                        if crate::bidi::has_rtl(label) {
+                            // epaint adds zero-width glyphs to right-to-left rows, so their text
+                            // is not the source text: check the lines the galley is built from.
+                            let lines = ribbon_button_lines(&painter, label, width);
+                            let first = lines[0].strip_prefix('…').unwrap_or(&lines[0]);
+                            assert!(label.ends_with(first), "{}: {label} -> {lines:?}", command.id);
+                            if let [first, second] = lines.as_slice()
+                                && !first.starts_with('…')
+                                && !second.starts_with('…')
+                            {
+                                // Both lines whole: they split the label at a space or after a slash.
+                                assert!(
+                                    *label == format!("{second} {first}") || *label == format!("{second}{first}"),
+                                    "{}: {label} -> {lines:?}",
+                                    command.id
+                                );
+                            }
+                            continue;
+                        }
                         let first = galley.rows.first().unwrap().text();
                         let visible = first.strip_suffix('…').unwrap_or(&first);
                         assert!(label.starts_with(visible), "{}: {label} -> {first}", command.id);
@@ -3151,6 +3282,15 @@ mod ribbon_label_tests {
             let lines = ribbon_button_lines(&painter, "長い日本語のラベル 続き", 50.0);
             assert_eq!(lines.len(), 2);
             assert!(lines[0].ends_with('…'));
+            // Hebrew comes in display order (`bidi::visual`): the reader starts at the right end,
+            // so "סקיצה חדשה" (New Sketch, stored as "חדשה סקיצה") puts סקיצה on the first line.
+            let label = crate::bidi::visual("סקיצה חדשה").into_owned();
+            let width = ribbon_label_width(&painter, "סקיצה").max(ribbon_label_width(&painter, "חדשה")) + 1.0;
+            assert!(ribbon_label_width(&painter, &label) > width);
+            assert_eq!(ribbon_button_lines(&painter, &label, width), vec!["סקיצה", "חדשה"]);
+            let lines = ribbon_button_lines(&painter, &crate::bidi::visual("אחת שתיים שלוש ארבע חמש"), 50.0);
+            assert_eq!(lines.len(), 2);
+            assert!(lines[1].starts_with('…'), "{lines:?}");
         });
         output.textures_delta.clear();
     }

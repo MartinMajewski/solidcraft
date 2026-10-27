@@ -5,6 +5,20 @@ pub(super) fn interface(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
     ui_kit::settings_section(ui, "theme", app.tr("ui.theme"), |ui| {
         theme_row(app, ui);
         ui_kit::tab_accent_strip(ui);
+        // The 3D view in the theme's colours, or the Light or Dark theme's (#4146).
+        ui_kit::settings_form(ui, t.form_label_width + t.space_16 + t.space_6, |ui| {
+            let label = app.tr("prefs.viewport");
+            ui_kit::row(ui, label, |ui| {
+                let views = crate::theme::ViewportTheme::ALL;
+                let labels: Vec<_> = views.iter().map(|v| crate::i18n::tr(v.label_id())).collect();
+                let mut selected = views.iter().position(|v| *v == app.preferences.viewport_theme).unwrap_or(0);
+                if ui_kit::settings_segments(ui, label, &mut selected, &labels)
+                    && let Some(view) = views.get(selected)
+                {
+                    app.preferences.viewport_theme = *view;
+                }
+            });
+        });
     });
     ui_kit::settings_section(ui, "layout", app.tr("prefs.layout"), |ui| {
         ui_kit::settings_pair(
@@ -28,6 +42,23 @@ pub(super) fn interface(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
                             app.preferences.ribbon_labels = selected == 0;
                         }
                     });
+                    // Where every feature dialog puts its OK and Cancel (#6708).
+                    ui_kit::row(ui, app.tr("prefs.dialog_buttons"), |ui| {
+                        let placements = [crate::ui_kit::DialogButtons::Bottom, crate::ui_kit::DialogButtons::Top];
+                        let mut selected = placements.iter().position(|p| *p == app.preferences.dialog_buttons).unwrap_or(0);
+                        if ui_kit::segmented(ui, &mut selected, &[app.tr("prefs.bottom"), app.tr("prefs.top")], Default::default())
+                            && let Some(placement) = placements.get(selected)
+                        {
+                            app.preferences.dialog_buttons = *placement;
+                        }
+                    });
+                    // Handles that don't depend on the language, by the saved value.
+                    let row = app.tr("prefs.dialog_buttons");
+                    for (label, key) in [("prefs.bottom", "bottom"), ("prefs.top", "top")] {
+                        if let Some(at) = crate::scenario::handle_at(&format!("dialog:{row}:{}", app.tr(label))) {
+                            crate::scenario::publish_handle(&format!("prefs:dialog_buttons:{key}"), at);
+                        }
+                    }
                     ui_kit::row(ui, app.tr("prefs.history"), |ui| {
                         let mut selected = if app.preferences.timeline_left { if app.preferences.timeline_under_browser { 2 } else { 1 } } else { 0 };
                         if ui_kit::segmented(
@@ -49,6 +80,21 @@ pub(super) fn interface(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
                             crate::scenario::publish_handle(&format!("dialog:{row}:{}", app.tr(legacy)), at);
                         }
                     }
+                    // Only the History at the left can list a sketch under its feature (#6489).
+                    ui_kit::row(ui, app.tr("prefs.history_sketches"), |ui| {
+                        ui.add_enabled_ui(app.preferences.timeline_left, |ui| {
+                            let mut selected = usize::from(app.preferences.history_sketches == HistorySketches::UnderFeature);
+                            if ui_kit::segmented(
+                                ui,
+                                &mut selected,
+                                &[app.tr("prefs.history_sketches_in_order"), app.tr("prefs.history_sketches_under_feature")],
+                                ui_kit::Segments { proportional: true, compact: true, ..Default::default() },
+                            ) {
+                                app.preferences.history_sketches =
+                                    if selected == 1 { HistorySketches::UnderFeature } else { HistorySketches::InOrder };
+                            }
+                        });
+                    });
                     ui_kit::row(ui, app.tr("prefs.browser"), |ui| {
                         ui.add_enabled_ui(app.ui.layout == crate::shell::LayoutMode::Floating, |ui| {
                             let mut selected = usize::from(app.preferences.browser_float);
@@ -57,7 +103,13 @@ pub(super) fn interface(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
                             }
                         });
                     });
+                    // Where a dialog's and a sketch's OK and Cancel also sit (#6709).
+                    ui_kit::row(ui, "", |ui| {
+                        let check = setting::view_confirm_corner(app, ui).on_hover_text(app.tr("prefs.view_confirm_corner_note"));
+                        crate::scenario::publish_target("prefs:view_confirm_corner", check.rect);
+                    });
                     ui_kit::text(ui, app.tr("prefs.layout_note"), ui_kit::Text::Hint("layout"));
+                    ui_kit::text(ui, app.tr("prefs.history_sketches_note"), ui_kit::Text::Hint("history_sketches"));
                     ui_kit::LayoutPreview {
                         compact: app.ui.layout == crate::shell::LayoutMode::Docked,
                         labels: app.preferences.ribbon_labels,

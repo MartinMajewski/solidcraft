@@ -15,8 +15,9 @@ pub(super) fn command(kind: &Kind) -> Option<&'static str> {
         }),
         Kind::Part(_) => Some("parts.insert"),
         Kind::PartSize(_) => Some("parts.resize"),
-        Kind::SaveMesh(_) => Some("file.save_mesh"),
+        Kind::SaveMesh(k) => Some(crate::dialogs_save_mesh::command_id(k)),
         Kind::ViewDxf { .. } => Some("file.export_view_dxf"),
+        Kind::InsertDrawing(p) => Some(if p.command.ends_with("dxf") { "sketch.insert_dxf" } else { "sketch.insert_svg" }),
         Kind::Sketch => Some("sketch.create"),
         Kind::SketchModify(k) => Some(crate::sketch_modify_ui::command(k)),
         Kind::Text(_) => Some("sketch.edit_text"),
@@ -182,7 +183,7 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
     if let Some(key) = manage_hint {
         ui_kit::text(ui, tr(key), ui_kit::Text::Hint("manage"));
     }
-    placement_row(d, ui);
+    placement_row(d, ui, &app.session);
     if matches!(&d.kind, Kind::Hole { opts, .. } if !opts.multiple) {
         // Each reference edge with its distance (#37).
         enter |= crate::hole_refs::input_rows(d, ui, &app.session);
@@ -197,6 +198,7 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
         Kind::PartSize(k) => enter |= crate::dialogs_part_size::rows(app, ui, k),
         Kind::SaveMesh(k) => enter |= crate::dialogs_save_mesh::rows(app, ui, k),
         Kind::ViewDxf { dashed, tolerance } => crate::dialogs_view_dxf::rows(app, ui, dashed, tolerance),
+        Kind::InsertDrawing(p) => crate::dialogs_insert_drawing::rows(ui, p),
         Kind::Sketch => {
             if d.error.is_some() && matches!(d.inputs.first().and_then(|i| i.items.first()), Some(Sel::Face { .. })) {
                 ui_kit::text(
@@ -318,7 +320,7 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
                     if st != old {
                         set_object(&mut d.inputs, &mut d.active, FROM_OBJECT, st == 2);
                         if st == 1 && start.is_empty() {
-                            *start = "5 mm".into();
+                            *start = length_default(&app.session, "5");
                         }
                         if st == 0 {
                             start.clear();
@@ -384,7 +386,7 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
                         }
                         if rtype == 2 {
                             form_row(ui, "End Radius", |ui| {
-                                enter |= extra_field(ui, &mut d.extra, "radius2", "1 mm");
+                                enter |= extra_field(ui, &mut d.extra, "radius2", &length_default(&app.session, "1"));
                             });
                             // Which end of the first edge takes the start radius.
                             form_row(ui, "Swap Ends", |ui| {
@@ -525,6 +527,7 @@ pub(super) fn rows(app: &mut SolveApp, ctx: &egui::Context, d: &mut Dialog, ui: 
             if opts.tapped {
                 enter |= crate::dialogs_thread::hole_rows(ui, &app.session.doc, &mut opts.thread, &mut opts.custom_thread);
                 ui_kit::checkbox_grid(ui, &mut [("Full thread depth", &mut opts.thread_full_depth)], 1);
+                crate::dialogs_thread::handedness_row(ui, &mut opts.handedness, "hole_handedness");
             }
             // Through all, the tip lies past the part.
             if !opts.all {
@@ -607,6 +610,7 @@ fn coil_rows(ui: &mut egui::Ui, extra: &mut serde_json::Map<String, Value>) -> b
 
 fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> bool {
     let mut enter = false;
+    let through_point = offset_through_point(d).is_some();
     match &mut d.kind {
         Kind::Revolve { angle, operation, .. } => {
             let cur = usize::from(to_object_on(&d.inputs));
@@ -673,7 +677,9 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
             }
         }
         Kind::OffsetPlane { offset } => {
-            enter |= expr_row(ui, "Distance", offset);
+            if !through_point {
+                enter |= expr_row(ui, "Distance", offset);
+            }
         }
         Kind::AnglePlane { angle } => {
             enter |= expr_row(ui, "Angle", angle);
@@ -735,9 +741,10 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
             enter |= quantity_row(ui, &app.session.doc, "Quantity", count);
             enter |= expr_row(ui, "Spacing", spacing);
         }
-        Kind::Pipe { diameter, wall } => {
+        Kind::Pipe { diameter, wall, operation } => {
             enter |= expr_row(ui, "Diameter", diameter);
             enter |= hint_row(ui, "Wall", wall, tr("solid"));
+            choice_row(ui, "Operation", "pp_op", operation, &OP_LABELS);
         }
         Kind::Stock { margin } => {
             enter |= expr_row(ui, "Margin", margin);
@@ -748,17 +755,18 @@ fn additional_rows(app: &mut SolveApp, d: &mut Dialog, ui: &mut egui::Ui) -> boo
         Kind::OffsetFaces { distance } => {
             enter |= expr_row(ui, "Distance", distance);
         }
-        Kind::Thread { designation, length, suggested, of } => {
+        Kind::Thread { designation, length, suggested, of, handedness } => {
             let mut full = length.trim().is_empty();
             let was_full = full;
             let mut modeled = d.extra.get("modeled").and_then(Value::as_bool).unwrap_or(false);
             let before = modeled;
             let (submitted, reset) = crate::dialogs_thread::rows(ui, designation, suggested, &mut modeled, &mut full);
+            crate::dialogs_thread::handedness_row(ui, handedness, "thread_handedness");
             if modeled != before {
                 d.extra.insert("modeled".into(), json!(modeled));
             }
             if full != was_full {
-                *length = if full { String::new() } else { "10 mm".into() };
+                *length = if full { String::new() } else { length_default(&app.session, "10") };
             }
             enter |= submitted;
             if reset {

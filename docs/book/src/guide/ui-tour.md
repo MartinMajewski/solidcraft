@@ -20,7 +20,7 @@
   row gives that item's menu. Right-click the design or a component and choose **Expand All** or
   **Collapse All** to open or close every folder under that row (the design row stays visible
   when the whole tree is collapsed). Rows drag into groups and other components.
-- **Viewport.** Click to select, Shift or Ctrl to add (Preferences › Selection), drag for a window or crossing box. While sketching, Ctrl/Cmd or Alt/Option suppress auto-snap by default; Shift prefers a midpoint. To
+- **Viewport.** Click to select, Shift or Ctrl to add (Preferences › Selection), drag for a window or crossing box. While sketching, Ctrl/Cmd or Alt/Option suppress auto-snap by default; Shift prefers a midpoint; the pointer also snaps to where two curves cross. To
   reach something under something else (two lines drawn on top of each other, coincident points,
   an edge in front of a face, overlapping bodies), hold the left button still for half a second
   (long-press on a touch screen) or right-click › **Select Other…**: a list of everything under
@@ -42,7 +42,9 @@
   diagonal view; Shift does not request snapping when the preset already requires it to orbit.
 
   Enable **Preferences → Navigation → Free orbit** to rotate the mouse and 3D mouse continuously
-  through both poles, preserving roll without axis snapping. It defaults to off for every mouse
+  through both poles, preserving roll. During an orbit drag, Shift snaps the view direction and
+  the picture rotation to the nearest quarter turn; releasing Shift resumes the unsnapped rotation.
+  Free orbit defaults to off for every mouse
   preset. With SolidWorks navigation, right-click a planar face and choose **Normal to Selection**
   to use Look At (also Ctrl+8); repeat to flip the side, preserving scale and projection.
 
@@ -67,6 +69,10 @@
   keep the nearest quarter-turn heading. The house, the navigation bar's Home button and a middle-button double-click in the view go
   home, framing what is shown now (Navigation › **Middle double-click** can make it Fit, which
   keeps the orientation, or turn it off).
+  Interface › **OK and Cancel in the view's corner** puts a large check and cross at the view's
+  top right while a dialog or a sketch is open, and moves the axis view or cube down below them.
+  With a dialog open they do what its OK and Cancel do (the check is grey whenever OK is); in a
+  sketch without a dialog they are Finish Sketch and Cancel Sketch.
   Right-click for the marking menu: eight commands around the cursor, plus a
   menu for whatever is under it. Near the window's bottom or right edge a menu opens above or
   to the left of the cursor, so it stays in view.
@@ -76,12 +82,20 @@
   identity or change the exported solid. Unsupported or uncertain wall geometry
   keeps its existing edge presentation.
 - **Dialogs** dock on the right with a live preview. Most features also show drag handles and a
-  value box in the viewport.
+  value box in the viewport. Interface › **Dialog buttons** › **Top** puts OK, Cancel and Apply in
+  the dialog's title row, right of the title, where they stay while sections open and close;
+  Cancel then also takes the place of the close button. Enter and Esc work as before.
 - **Timeline** (bottom). Every feature in order. Double-click to edit, drag the marker to roll
   back, and drag features to reorder them. Preferences can put the timeline vertically at the
   far left of the viewport, beside the browser. Its seam handle switches between icon
   chips and compact feature names; the browser can collapse to a rail beside either width.
   Previous, Play and Next sit at the top. Double-click Previous to roll to the start.
+  Interface › **Sketches** › **Under their feature** lists a sketch in the vertical timeline one
+  level in, under the first feature built from it, behind that feature's fold arrow. Dragging the
+  feature takes its sketch along. A later feature built from the same sketch gets a row that
+  selects it, and while the marker sits between a sketch and its feature, or the two are in
+  different folders, the sketch keeps a row of its own. The timeline along the bottom always lists
+  features in creation order.
 - **Command search (S).** Click the ribbon search field or press S to open the search popup
   below it. Results group commands by their ribbon path and show matching features and user
   parameters from this design. With an empty query, recent commands appear first, followed by
@@ -117,9 +131,13 @@ and command menus remain available.
 
 ### Colour themes
 
-General › **Theme** lists Dark, Light and System (follows the operating system), the built-in
-Gruvbox themes (dark and light, each in hard, normal and soft contrast) and any themes you have
-imported. A choice applies at once.
+Interface › **Theme** lists Dark, Light and System (follows the operating system), the built-in
+themes and any themes you have imported. A choice applies at once. Under the themes, **Viewport** draws the 3D view in the Light or Dark theme's colours whatever the window uses, for example the model on a light view in a dark window (**Follow theme**, the default, keeps the theme's own). The built-in themes are Gruvbox
+(dark and light, each in hard, normal and soft contrast), SolidCraft 95, Platinum 9, Cupertino,
+Green Phosphor, Amber Phosphor, Blueprint, One Dark, Tokyo Night, Solarized Light, Nord, High
+Contrast, Graphite, Nosferatu, Catppuccin Mocha, and Okibi and Akari (dark and light, from the
+[Okibi design system](https://kaievns.github.io/okibi-akiri-design-system-spec/)), and Clay and
+Clay Dark (warm ivory paper and warm charcoal, with a terracotta accent and rounded corners).
 
 A theme is a small JSON file that starts from the Dark or Light palette and changes any of its
 colours and corner radii by name:
@@ -135,7 +153,9 @@ colours and corner radii by name:
     "accent": "#83a598",
     "viewport_top": "#32302f",
     "viewport_bottom": "#32302f",
-    "triad": ["#fb4934", "#b8bb26", "#83a598"]
+    "axis_x": "#fb4934",
+    "axis_y": "#b8bb26",
+    "axis_z": "#83a598"
   },
   "radii": {
     "radius_sm": 2,
@@ -148,8 +168,11 @@ colours and corner radii by name:
 }
 ```
 
-Colours are `#rrggbb`, or `#rrggbbaa` for translucent ones. A few colours, such as the view
-triad's X, Y and Z, take a list. Any colour the file leaves out keeps the base palette's value.
+Colours are `#rrggbb`, or `#rrggbbaa` for translucent ones. A few colours, such as the four
+Continuity Analysis seams (`continuity`), take a list. Any colour the file leaves out keeps the
+base palette's value. `axis_x`, `axis_y` and `axis_z` colour every X, Y and Z axis: the origin,
+the view triad, the navigation cube and the Move gizmo. A file from an earlier version may set
+`triad` or `gizmo` instead; it still reads, and those colours now go to every axis.
 
 `radii` is optional. Its six keys above accept integers from 0 to 32 in logical UI points;
 zero makes square corners. Omitted keys keep today's base values: 4, 6, 8, 10, 6 and 7,
@@ -158,7 +181,7 @@ styles form controls, and `sketch_mode_radius` styles sketch creation buttons. T
 these settings, with matching shapes across light and dark variants. Dock joins remain
 square, circular controls remain circular, and control sizes and spacing stay the same.
 Platinum 9 and the phosphor themes use square corners, SolidCraft 95 uses subtle 3-point
-corners, Blueprint uses the standard radii, and Cupertino uses softer corners. Other built-in
+corners, Blueprint uses the standard radii, Cupertino uses softer corners, and Clay and Clay Dark use rounded corners. Other built-in
 themes retain the defaults.
 
 Tab accents also have separate fill, small-text ink and tint keys. Sketch uses

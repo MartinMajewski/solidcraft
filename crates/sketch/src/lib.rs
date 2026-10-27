@@ -53,7 +53,7 @@ pub use freeform_offset::{FreeformOffset, FreeformOffsetOutput, OFFSET_TOLERANCE
 pub use link::{Link, LinkGeom, LinkKind, LinkSource, MAX_LINK_ENTITIES, SKETCH_AXIS_HALF, TextExprs, sketch_axis_geom};
 pub use model::{
     Constraint, ConstraintKind, Curve, CurveKind, MAX_CONSTRAINTS, MAX_COORD, MAX_CURVES, MAX_POINTS, PointExprs, SPoint, Sketch, SketchError,
-    SketchView,
+    SketchView, TwoCircles,
 };
 pub use offset::OffsetChain;
 pub use offset_topology::{OffsetCreated, OffsetRole, OffsetRoleFlags, OffsetRoleKind, OffsetTopology};
@@ -63,17 +63,21 @@ pub use profiles::{
     CurvePick, Profile, distinct_curves, find_drawn_profiles, find_profiles, merge_regions, profile_at_point, profile_by_curves,
     without_text_counters,
 };
-pub use shape::{Shape, intersections, intersections_within};
+pub use shape::{Shape, intersections, intersections_within, nearest_crossing, nearest_curve_intersection};
 pub use solver::solve_after_edit_with_analysis;
 pub use solver::{
-    Analysis, CONSISTENT, DrivingValues, Hold, MAX_COMPONENT_VARS, SolveReport, SolveStatus, constraint_residual, determined_by, flips_from_stored,
-    measure_dimension, move_line_towards, move_point_towards, solve, solve_after_edit, solve_after_link_move, solve_after_value_edit, solve_holding,
-    solve_with,
+    Analysis, CONSISTENT, DrivingValues, Hold, MAX_COMPONENT_VARS, SolveReport, SolveStatus, constraint_residual, determined_by, fillets_kept,
+    flips_from_stored, measure_dimension, move_line_towards, move_point_towards, solve, solve_after_edit, solve_after_link_move,
+    solve_after_value_edit, solve_holding, solve_with,
 };
 pub use text::{MAX_TEXT_CHARS, TextAlign, TextMetrics, TextStyle, text_geometry, text_geometry_in, text_geometry_styled};
 pub use thin::{MAX_THIN_SEGMENTS, thin_wall_regions};
-pub use wire::{MAX_FIT_POINTS, MAX_WIRE_POINTS, Wire, WireSpace, fit_polyline};
+pub use wire::{MAX_FIT_POINTS, MAX_WIRE_POINTS, Wire, WireArc, WireSpace, arc_from_3_points, arc_polyline, arc_sweep, fit_polyline};
 
+#[cfg(test)]
+mod circle_edge_tests;
+#[cfg(test)]
+mod coincident_tangent_tests;
 #[cfg(test)]
 mod construct_rounds_tests;
 #[cfg(test)]

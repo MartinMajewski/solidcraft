@@ -490,11 +490,28 @@ fn batch_stops_at_first_error_and_rolls_back() {
     let r = raw_tool(
         &mut s,
         "batch",
-        json!({"rollback": false, "commands": [{"command": "solid.sphere", "params": {"radius": 3, "center": [50, 0, 0]}}, {"command": "NoSuchCommand"}]}),
+        json!({"rollback": false, "commands": [{"command": "solid.sphere", "params": {"radius": 3, "center": [50, 0, 0]}}, {"command": "solid.extrude", "params": {"distance": "bogus +"}}]}),
     );
     assert_eq!(r["result"]["isError"], true);
-    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("NoSuchCommand"));
+    assert!(r["result"]["content"][0]["text"].as_str().unwrap().contains("solid.extrude"));
     assert_eq!(tool(&mut s, "measure", json!({}))["body_count"], 2);
+}
+
+/// #5853: a misspelled command, however late in the batch, refuses the batch before its first
+/// step: nothing runs, nothing is undone, and the error names the closest command.
+#[test]
+fn batch_refuses_an_unknown_command_before_the_first_step() {
+    let mut s = server();
+    let mut steps: Vec<Value> = (0..20).map(|k| json!({"command": "solid.sphere", "params": {"radius": 1, "center": [k * 5, 0, 0]}})).collect();
+    steps.push(json!({"command": "solid.extrud", "params": {"distance": 5}}));
+    let r = raw_tool(&mut s, "batch", json!({"commands": steps}));
+    assert_eq!(r["result"]["isError"], true, "{r}");
+    let body: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!((body["completed"].clone(), body["failed"]["index"].clone(), body["undone"].clone()), (json!(0), json!(20), json!(0)), "{body}");
+    assert!(body["failed"]["error"].as_str().is_some_and(|e| e.contains("closest: `solid.extrude`")), "{body}");
+    assert_eq!((body["applied"].clone(), body["not_run"].as_array().map(Vec::len)), (json!([]), Some(21)), "{body}");
+    assert_eq!(tool(&mut s, "measure", json!({}))["body_count"], 0, "no step ran");
+    assert_eq!(tool(&mut s, "inspect_design", json!({"measure": false}))["undo"], 0);
 }
 
 /// #5822: with `coalesce_parameters` a batch of parameter edits, one per step, rebuilds the
@@ -607,7 +624,8 @@ fn a_failed_batch_with_file_new_restores_the_original_design() {
         json!({"rollback": true, "commands": [
             {"command": "file.new", "params": {"name": "Replacement"}},
             {"command": "solid.box", "params": {"length": 2, "width": 2, "height": 2}},
-            {"command": "not.a.command"},
+            // Fails at its turn (an unknown command would be refused before the first step, #5853).
+            {"command": "solid.extrude", "params": {"distance": "bogus +"}},
         ]}),
     );
     assert_eq!(r["result"]["isError"], true, "{r}");
@@ -1472,6 +1490,8 @@ fn skills_name_only_real_tools_and_commands() {
         include_str!("../../../skills/solidcraft-checking/reference/porting.md"),
         include_str!("../../../skills/solidcraft-mechanisms/SKILL.md"),
         include_str!("../../../skills/solidcraft-mechanisms/reference.md"),
+        include_str!("../../../skills/solidcraft-reporting/SKILL.md"),
+        include_str!("../../../skills/solidcraft-reporting/reference/report-template.md"),
     ];
     let mut s = server();
     let tools: Vec<String> = tool_definitions().iter().filter_map(|t| t["name"].as_str()).map(str::to_owned).collect();
@@ -1824,7 +1844,7 @@ fn batch_reports_timings_and_profile() {
     let r = raw_tool(
         &mut s,
         "batch",
-        json!({"timings": true, "commands": [{"command": "solid.box", "params": {"length": 1, "width": 1, "height": 1}}, {"command": "NoSuchCommand"}]}),
+        json!({"timings": true, "commands": [{"command": "solid.box", "params": {"length": 1, "width": 1, "height": 1}}, {"command": "solid.extrude", "params": {"distance": "bogus +"}}]}),
     );
     let body: Value = serde_json::from_str(r["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(body["timings"].as_array().map(Vec::len), Some(2), "the failing step is timed too: {body}");
@@ -2177,4 +2197,54 @@ fn describe_command_and_strict_parameter_checking() {
     assert!(text.contains("unknown key `operaton`; did you mean `operation`?"), "{text}");
     let m = tool(&mut s, "measure", json!({}));
     assert_eq!(m["body_count"], json!(0), "{m}");
+}
+
+/// Plain `mcp` with no app running: the session is headless, says so on every result, and bridges
+/// to the app once one runs, but only while it holds no work of its own.
+#[test]
+fn auto_session_bridges_to_a_late_app_only_while_empty() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    // A port nothing listens on: the bridge exists, its calls say the app is not running.
+    let port = Rc::new(Cell::new(None::<u16>));
+    let seen = port.clone();
+    let mut s = Server::new(Box::new(crate::Auto::new(Headless::default(), Box::new(move || seen.get()), None)));
+    let text = |r: &Value| r["result"]["content"].as_array().unwrap().iter().filter_map(|c| c["text"].as_str()).collect::<Vec<_>>().join("\n");
+
+    let r = raw_tool(&mut s, "list_commands", json!({}));
+    assert!(text(&r).contains("headless session because the SolidCraft app was not found"), "{r}");
+    let init = call(&mut s, 1, "initialize", json!({}));
+    assert!(init["result"]["instructions"].as_str().unwrap().contains("was not running when this server started"));
+
+    // The app appears while the session is empty: the next call goes to it.
+    port.set(Some(1));
+    let r = raw_tool(&mut s, "inspect_design", json!({}));
+    assert!(!text(&r).contains("headless session because"), "{r}");
+    assert!(s.backend().has_ui());
+    assert!(s.backend().describe().contains("connected to the SolidCraft app"));
+
+    // With work in the headless session, the app showing up changes nothing.
+    port.set(None);
+    let mut s = Server::new(Box::new(crate::Auto::new(
+        Headless::default(),
+        Box::new({
+            let p = port.clone();
+            move || p.get()
+        }),
+        None,
+    )));
+    let r = raw_tool(&mut s, "execute", json!({"command": "solid.box", "params": {"length": 10, "width": 10, "height": 10}}));
+    assert_ne!(r["result"]["isError"], json!(true), "{r}");
+    port.set(Some(1));
+    let r = raw_tool(&mut s, "inspect_design", json!({}));
+    assert!(text(&r).contains("headless session because the SolidCraft app was not found"), "{r}");
+    assert!(!s.backend().has_ui());
+}
+
+/// A server with no `Auto` backend (`--headless`, `--in`) adds no notice.
+#[test]
+fn plain_headless_adds_no_notice() {
+    let mut s = server();
+    let r = raw_tool(&mut s, "list_commands", json!({}));
+    assert_eq!(r["result"]["content"].as_array().unwrap().len(), 1);
 }

@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 
 use egui_wgpu::wgpu;
 pub use solidcraft_gpu::view::{
-    AccessMap, BlockBytes, BlockTris, DrawStats, DrawStatsHandle, Frame, GpuImage, GpuScene, GpuTarget, INSTANCE_SIZE, InstanceLook, InstancedMesh,
-    LINE_SIZE, LOD_PX, PBR_SIZE, PlannedBody, Renderer, SHARED_SIZE, SceneBlock, SceneSlot, SharedTris, TRI_SIZE, level_for, placement_scale,
-    supersampled_size,
+    AccessMap, BlockBuilder, BlockBytes, BlockTris, DrawStats, DrawStatsHandle, Frame, GpuImage, GpuScene, GpuTarget, INSTANCE_SIZE, InstanceLook,
+    InstancedMesh, LINE_SIZE, LOD_PX, MAX_PALETTE, PBR_SIZE, Palette, PaletteIndex, PlannedBody, Renderer, SHARED_SIZE, SceneBlock, SceneSlot,
+    SharedTris, TRI_SIZE, TriClass, extend_runs, level_for, placement_scale, runs_within, supersampled_size,
 };
 
 /// A frame of the viewport as an egui paint callback.
@@ -22,13 +22,36 @@ pub struct ViewportCallback(pub Frame);
 /// are meshed on the CPU. When the two targets differ, the scene is drawn offscreen and blitted.
 /// Also returns the handle to what each frame drew.
 pub fn install(rs: &egui_wgpu::RenderState, scene: GpuTarget, window: GpuTarget, gpu_meshing: bool) -> (GpuTarget, DrawStatsHandle) {
+    log_uncaptured_errors(&rs.device);
     let tess = if gpu_meshing { solidcraft_gpu::view::tessellation(&rs.adapter, &rs.device, &rs.queue, solidcraft_gpu::SHADER) } else { None };
     let scene = GpuTarget { tess: tess.is_some(), ..scene };
     let window = GpuTarget { tess: tess.is_some(), ..window };
     let res = Renderer::with_window_target(&rs.device, scene, window, tess);
+    // What the renderer can do (order-independent transparency), not only what was asked for.
+    let scene = res.target();
     let stats = res.stats();
     rs.renderer.write().callback_resources.insert(res);
     (scene, stats)
+}
+
+/// A GPU error no error scope caught is reported, never a panic: a device's default handler
+/// panics with "wgpu error: ...", which would close the app with the open design (#5486 reported
+/// "wgpu error: Out of Memory" from such a panic). The headless picture devices do the same
+/// (`Capturer::headless`). Errors the code expects are caught under error scopes where they
+/// happen, and those take priority over this handler. Errors before [`install`] (egui's own
+/// pipelines at startup) still reach the default handler, so a startup failure stays a crash
+/// report with its startup step.
+pub fn log_uncaptured_errors(device: &wgpu::Device) {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    let reported = std::sync::Arc::new(AtomicU32::new(0));
+    device.on_uncaptured_error(std::sync::Arc::new(move |e: wgpu::Error| {
+        // The first few only: an invalid resource repeats its error on every frame.
+        if reported.fetch_add(1, Ordering::Relaxed) < 8 {
+            log::error!("GPU: {e}");
+            #[cfg(not(target_arch = "wasm32"))]
+            eprintln!("SolidCraft graphics: {e}");
+        }
+    }));
 }
 
 /// Draw this process's headless pictures (`ui.render`, the agent's view image, thumbnails of
@@ -219,7 +242,7 @@ pub(crate) fn render_offscreen(
         back,
         eye,
         size,
-        Offscreen { tess, product: false, srgb: false, analysis, analysis_colors: colors, ssaa: 1.0 },
+        Offscreen { tess, product: false, srgb: false, analysis, analysis_colors: colors, ssaa: 1.0, ao_radius: 0.0 },
     )
 }
 
@@ -239,7 +262,7 @@ pub(crate) fn render_product_offscreen(
         back,
         eye,
         size,
-        Offscreen { tess: None, product: true, srgb, analysis: [0.0; 8], analysis_colors: [0.0; 36], ssaa: 1.0 },
+        Offscreen { tess: None, product: true, srgb, analysis: [0.0; 8], analysis_colors: [0.0; 36], ssaa: 1.0, ao_radius: 0.0 },
     )
 }
 
@@ -251,6 +274,7 @@ struct Offscreen<'a> {
     analysis: [f32; 8],
     analysis_colors: [f32; 36],
     ssaa: f32,
+    ao_radius: f32,
 }
 
 /// [`render_offscreen`] of a scene supersampled `ssaa` times (1: off).
@@ -270,7 +294,28 @@ pub(crate) fn render_offscreen_ssaa(
         back,
         eye,
         size,
-        Offscreen { tess: None, product: false, srgb: false, analysis: [0.0; 8], analysis_colors: [0.0; 36], ssaa },
+        Offscreen { tess: None, product: false, srgb: false, analysis: [0.0; 8], analysis_colors: [0.0; 36], ssaa, ao_radius: 0.0 },
+    )
+}
+
+/// [`render_offscreen`] of a scene with ambient occlusion of `ao_radius` (world units; 0: off).
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) fn render_offscreen_ao(
+    scene: GpuScene,
+    view_proj: [[f32; 4]; 4],
+    back: [f32; 3],
+    eye: [f32; 4],
+    size: u32,
+    ao_radius: f32,
+) -> Option<Vec<u8>> {
+    offscreen(
+        scene,
+        None,
+        view_proj,
+        back,
+        eye,
+        size,
+        Offscreen { tess: None, product: false, srgb: false, analysis: [0.0; 8], analysis_colors: [0.0; 36], ssaa: 1.0, ao_radius },
     )
 }
 
@@ -284,13 +329,13 @@ fn offscreen(
     size: u32,
     options: Offscreen<'_>,
 ) -> Option<Vec<u8>> {
-    let Offscreen { tess, product, srgb, analysis, analysis_colors, ssaa } = options;
+    let Offscreen { tess, product, srgb, analysis, analysis_colors, ssaa, ao_radius } = options;
     let (adapter, device, queue) = offscreen_device()?;
     eprintln!("offscreen adapter: {:?}", adapter.get_info().backend);
     let format = if srgb { wgpu::TextureFormat::Rgba8UnormSrgb } else { wgpu::TextureFormat::Rgba8Unorm };
     let depth = solidcraft_gpu::depth_format(&device, true);
     let compute = tess.and_then(|shader| solidcraft_gpu::view::tessellation(&adapter, &device, &queue, shader));
-    let target = GpuTarget { format, depth: Some(depth), samples: 1, tess: compute.is_some() };
+    let target = GpuTarget { format, depth: Some(depth), samples: 1, tess: compute.is_some(), oit: false };
     let mut resources = egui_wgpu::CallbackResources::default();
     resources.insert(Renderer::new(&device, target, compute));
     let none = || Arc::new(Mutex::new(None));
@@ -316,7 +361,7 @@ fn offscreen(
         access: None,
         outline: false,
         eye,
-        ao_radius: 0.0,
+        ao_radius,
         ssaa,
         hover_tint: [0.0; 3],
         selection_tint: [0.0; 3],
@@ -383,6 +428,106 @@ fn offscreen(
     device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
     let bytes = slice.get_mapped_range().ok()?.to_vec();
     Some(bytes)
+}
+
+/// A viewport renderer kept on an offscreen device of its own, for timing frames (prepare, paint,
+/// and the GPU finishing them) as the window would draw them. Scale measurements only.
+#[cfg(all(test, not(target_arch = "wasm32")))]
+pub(crate) struct OffscreenFrames {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    resources: egui_wgpu::CallbackResources,
+    color: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    size: u32,
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+impl OffscreenFrames {
+    /// `None` without a GPU adapter. With `tess`, planned bodies are evaluated on the GPU.
+    pub(crate) fn new(size: u32, tess: bool) -> Option<OffscreenFrames> {
+        let (adapter, device, queue) = offscreen_device()?;
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let depth = solidcraft_gpu::depth_format(&device, true);
+        let compute = if tess { solidcraft_gpu::view::tessellation(&adapter, &device, &queue, solidcraft_gpu::SHADER) } else { None };
+        let target = GpuTarget { format, depth: Some(depth), samples: 1, tess: compute.is_some(), oit: false };
+        let mut resources = egui_wgpu::CallbackResources::default();
+        resources.insert(Renderer::new(&device, target, compute));
+        let texture = |format, usage| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("offscreen frames"),
+                    size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let color = texture(format, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let depth = texture(depth, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        Some(OffscreenFrames { device, queue, resources, color, depth, size })
+    }
+
+    /// What the renderer can do, as the viewport is told when the window's renderer is
+    /// installed (plans evaluated, order-independent transparency).
+    pub(crate) fn target(&self) -> Option<GpuTarget> {
+        self.resources.get::<Renderer>().map(Renderer::target)
+    }
+
+    /// Whether the device evaluates plans (so scenes should be built with `tess`).
+    pub(crate) fn tessellates(&self) -> bool {
+        self.resources.get::<Renderer>().is_some_and(|r| r.target().tess)
+    }
+
+    /// Draw one frame and wait for the GPU: milliseconds from `prepare` to the work finishing.
+    pub(crate) fn frame(&mut self, frame: Frame) -> f64 {
+        let started = std::time::Instant::now();
+        let cb = ViewportCallback(frame);
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        let screen = egui_wgpu::ScreenDescriptor { size_in_pixels: [self.size, self.size], pixels_per_point: 1.0 };
+        let extra = egui_wgpu::CallbackTrait::prepare(&cb, &self.device, &self.queue, &screen, &mut encoder, &mut self.resources);
+        {
+            let mut pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("offscreen frames"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.color,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: &self.depth,
+                        depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                        stencil_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(0), store: wgpu::StoreOp::Store }),
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                })
+                .forget_lifetime();
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(self.size as f32, self.size as f32));
+            let info = egui::PaintCallbackInfo { viewport: rect, clip_rect: rect, pixels_per_point: 1.0, screen_size_px: [self.size, self.size] };
+            egui_wgpu::CallbackTrait::paint(&cb, info, &mut pass, &self.resources);
+        }
+        self.queue.submit(extra.into_iter().chain([encoder.finish()]));
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        started.elapsed().as_secs_f64() * 1000.0
+    }
+
+    /// What the model scene's last change uploaded.
+    pub(crate) fn uploads(&self) -> solidcraft_gpu::view::UploadStats {
+        self.resources.get::<Renderer>().map(Renderer::uploads).unwrap_or_default()
+    }
+
+    /// What the last frame drew.
+    pub(crate) fn stats(&self) -> DrawStats {
+        self.resources.get::<Renderer>().and_then(|r| r.stats().lock().ok().map(|s| *s)).unwrap_or_default()
+    }
 }
 
 #[cfg(test)]

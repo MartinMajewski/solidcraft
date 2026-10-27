@@ -29,6 +29,7 @@ mod shortcuts;
 mod status;
 mod table;
 mod text;
+mod value_focus;
 
 pub(crate) use actions::*;
 pub use actions::{Button, button};
@@ -47,8 +48,8 @@ pub(crate) use history::*;
 pub(crate) use layout::*;
 pub(crate) use menu::{Menu, MenuItem, rename_menu, workspace_menu};
 pub(crate) use metrics::{ContentWidth, header_height, row_height, table_row_height};
-pub use panel::Window;
 pub(crate) use panel::{ComputeStatus, FeatureOptions, Panel, Part, WindowPage, panel_header_hover};
+pub use panel::{DialogButtons, Window};
 #[cfg(test)]
 pub(crate) use panel::{collapsible_header, header};
 pub(crate) use preferences::*;
@@ -61,6 +62,7 @@ pub(crate) use search::{CommandSearch, SearchBadge, SearchFieldGeometry};
 pub(crate) use shortcuts::*;
 pub(crate) use status::*;
 pub(crate) use table::*;
+pub(crate) use value_focus::*;
 
 #[cfg(test)]
 mod gallery;
