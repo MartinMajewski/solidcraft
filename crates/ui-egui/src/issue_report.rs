@@ -178,6 +178,8 @@ struct Pending {
     deadline: f64,
     window: egui::Rect,
     pixels_per_point: f32,
+    /// The longest side a texture can have here: the screenshot's preview is one.
+    max_side: usize,
 }
 
 /// A bounded formatting sink also avoids allocating a full hostile Debug/JSON value first.
@@ -302,6 +304,84 @@ fn feature_context(feature: &solidcraft_engine::doc::Feature) -> String {
     format!("Feature {}: {}\n{}", feature.id, debug(&feature.name, 160), block(&json_context(&feature.kind, 2000)))
 }
 
+/// Messages and feature errors listed in a report (#7348), each entry cut to `MAX_ENTRY_CHARS`.
+const REPORT_MESSAGES: usize = 8;
+const REPORT_FAILURES: usize = 10;
+const MAX_ENTRY_CHARS: usize = 300;
+
+/// The user's home folder as text, for [`report_text`]; a bare root is never replaced.
+fn home_text() -> Option<String> {
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })?;
+    let home = home.to_string_lossy().trim_end_matches(['/', '\\']).to_string();
+    (home.chars().count() > 1).then_some(home)
+}
+
+/// Untrusted text (messages, feature errors) as one quoted line: the home folder shown as `~`,
+/// cut to `MAX_ENTRY_CHARS` characters.
+fn report_text(text: &str, home: Option<&str>) -> String {
+    let mut text = limited(text, MAX_ENTRY_CHARS * 8);
+    if let Some(home) = home.filter(|h| h.chars().count() > 1) {
+        text = text.replace(home, "~");
+    }
+    if text.chars().count() > MAX_ENTRY_CHARS {
+        text = format!("{}…", text.chars().take(MAX_ENTRY_CHARS).collect::<String>());
+    }
+    format!("{text:?}")
+}
+
+/// How long ago `at` was, at `now` (both ms), in English like the rest of the report.
+fn report_ago(now: f64, at: f64) -> String {
+    let s = ((now - at) / 1000.0).max(0.0);
+    let s = if s.is_finite() { s.floor() } else { 0.0 };
+    if s < 60.0 {
+        format!("{s:.0} s ago")
+    } else if s < 3600.0 {
+        format!("{:.0} min ago", (s / 60.0).floor())
+    } else {
+        format!("{:.0} h ago", (s / 3600.0).floor())
+    }
+}
+
+/// The last messages of the Messages log, oldest first.
+fn messages_context(messages: &crate::messages::Messages, now: f64, home: Option<&str>) -> String {
+    let all = messages.iter();
+    let total = all.len();
+    if total == 0 {
+        return "\nMessages: none\n".into();
+    }
+    let shown = total.min(REPORT_MESSAGES);
+    let mut out = format!("\nMessages (last {shown} of {total}):\n");
+    for m in all.skip(total.saturating_sub(shown)) {
+        let level = if m.error { "error" } else { "info" };
+        let repeats = if m.count > 1 { format!(" (×{})", m.count) } else { String::new() };
+        out.push_str(&format!("    {} {level}: {}{repeats}\n", report_ago(now, m.at), report_text(&m.text, home)));
+    }
+    out
+}
+
+/// Every feature whose result has an error, in timeline order, not only the selected or latest one.
+fn failures_context(app: &SolveApp, home: Option<&str>) -> String {
+    let mut failing = app.session.doc.features.iter().filter_map(|f| app.session.model.result(f.id)?.error.as_deref().map(|e| (f, e)));
+    let mut out = String::new();
+    let mut count = 0usize;
+    for (feature, error) in failing.by_ref().take(REPORT_FAILURES) {
+        count += 1;
+        out.push_str(&format!(
+            "    Feature {} {} ({}): {}\n",
+            feature.id,
+            report_text(&feature.name, home),
+            feature.kind.type_name(),
+            report_text(error, home)
+        ));
+    }
+    let more = failing.count();
+    match (count, more) {
+        (0, _) => "\nFailing features: none\n".into(),
+        (n, 0) => format!("\nFailing features ({n}):\n{out}"),
+        (n, more) => format!("\nFailing features (first {n} of {}):\n{out}", n + more),
+    }
+}
+
 /// Read-only context excludes whole documents, sketch geometry and imported file contents.
 pub fn draft_for(app: &SolveApp, dialog: Option<&dialogs::Dialog>, error: Option<&str>) -> Draft {
     let mut context = String::new();
@@ -339,6 +419,9 @@ pub fn draft_for(app: &SolveApp, dialog: Option<&dialogs::Dialog>, error: Option
             context.push_str(&format!("Feature error: {}\n", debug(&e, 1000)));
         }
     }
+    let home = home_text();
+    context.push_str(&failures_context(app, home.as_deref()));
+    context.push_str(&messages_context(&app.messages, crate::now_ms(), home.as_deref()));
     let actual = error.map(|e| debug(&e, 4000)).unwrap_or_else(|| "No command error was recorded.".into());
     let image_state = if error.is_some() {
         "A failed preview may display the last valid geometry; that geometry is not evidence that the failed operation succeeded."
@@ -526,6 +609,7 @@ fn capture(app: &mut SolveApp, ctx: &egui::Context, dialog: Option<&dialogs::Dia
         deadline: now + 8000.0,
         window: ctx.content_rect(),
         pixels_per_point: ctx.pixels_per_point(),
+        max_side: ctx.input(|i| i.max_texture_side),
     });
     app.queued_shots.push((token, now + 150.0, 0));
     ctx.request_repaint();
@@ -557,9 +641,9 @@ pub(crate) fn tick(app: &mut SolveApp, ctx: &egui::Context) {
 }
 
 pub(crate) fn receive(app: &mut SolveApp, token: u64, image: Arc<ColorImage>) {
-    if !app.issue_report.pending.as_ref().is_some_and(|p| p.token == token) {
+    let Some(max_side) = app.issue_report.pending.as_ref().filter(|p| p.token == token).map(|p| p.max_side) else {
         return;
-    }
+    };
     let stale = app.issue_report.pending.as_ref().is_some_and(|p| p.signature != signature(app, app.dialog.as_ref()));
     app.issue_report.pending = None;
     if let Some(draft) = app.issue_report.draft.as_mut() {
@@ -567,14 +651,55 @@ pub(crate) fn receive(app: &mut SolveApp, token: u64, image: Arc<ColorImage>) {
             draft.note = "The model, inputs or view changed during capture. Retake the current view.".into();
             return;
         }
-        let pixels = image.width().checked_mul(image.height());
-        if !pixels.is_some_and(|n| n > 0 && n <= MAX_IMAGE_PIXELS && n == image.pixels.len()) {
-            draft.note = "Screenshot dimensions are unsupported. The text draft is still available.".into();
-        } else {
-            draft.image = Some(image);
-            draft.note = "Screenshot captured locally. Review it before attaching it on GitHub.".into();
+        match fitted(image, MAX_IMAGE_PIXELS, max_side) {
+            Some(image) => {
+                draft.image = Some(image);
+                draft.note = "Screenshot captured locally. Review it before attaching it on GitHub.".into();
+            }
+            None => draft.note = "Screenshot dimensions are unsupported. The text draft is still available.".into(),
         }
     }
+}
+
+/// `image` with at most `max` pixels and no side longer than `max_side`: a larger frame (a 6K
+/// display, a window across several screens, #7091) is averaged down by the smallest whole
+/// factor that fits. A preview texture over the GPU's limit fails its upload, and the window's
+/// device panics on that. `None` only for a frame whose size doesn't match its pixels.
+fn fitted(image: Arc<ColorImage>, max: usize, max_side: usize) -> Option<Arc<ColorImage>> {
+    let [w, h] = image.size;
+    let n = w.checked_mul(h)?;
+    if n == 0 || n != image.pixels.len() || max == 0 || max_side == 0 {
+        return None;
+    }
+    let fits = |k: usize| w.div_ceil(k) <= max_side && h.div_ceil(k) <= max_side && w.div_ceil(k).saturating_mul(h.div_ceil(k)) <= max;
+    if fits(1) {
+        return Some(image);
+    }
+    // Ends: at a factor of the longer side the frame is one pixel.
+    let mut k = 2;
+    while !fits(k) {
+        k += 1;
+    }
+    let [ow, oh] = [w.div_ceil(k), h.div_ceil(k)];
+    let mut pixels = Vec::with_capacity(ow * oh);
+    for oy in 0..oh {
+        let rows = oy * k..((oy + 1) * k).min(h);
+        for ox in 0..ow {
+            let cols = ox * k..((ox + 1) * k).min(w);
+            let (mut sum, mut count) = ([0_u64; 4], 0_u64);
+            for y in rows.clone() {
+                for p in image.pixels.get(y * w + cols.start..y * w + cols.end).unwrap_or_default() {
+                    for (s, c) in sum.iter_mut().zip(p.to_array()) {
+                        *s += u64::from(c);
+                    }
+                    count += 1;
+                }
+            }
+            let [r, g, b, a] = sum.map(|s| u8::try_from(s / count.max(1)).unwrap_or(u8::MAX));
+            pixels.push(egui::Color32::from_rgba_premultiplied(r, g, b, a));
+        }
+    }
+    Some(Arc::new(ColorImage::new([ow, oh], pixels)))
 }
 
 /// The report card is hidden only while a frame is captured, so it cannot cover the evidence.
@@ -831,6 +956,73 @@ mod tests {
             assert!(draft.body.contains(expected), "missing {expected}: {}", draft.body);
         }
         assert_eq!(before, (app.session.doc.to_json(), app.session.revision, app.session.undo.len(), app.session.redo.len(), app.cam));
+    }
+
+    /// The sample with Fillet1 failing (the plate made narrower than its fillets).
+    fn failing_sample() -> SolveApp {
+        let mut s = Session::default();
+        s.run_script(&solidcraft_engine::sample::script()).unwrap();
+        s.execute("parameters.change", &json!({"name": "width", "expression": "5 mm"})).unwrap();
+        SolveApp::new(s, Default::default())
+    }
+
+    #[test]
+    fn issue_report_lists_the_last_messages_and_a_failing_feature_that_is_not_the_latest() {
+        let mut app = failing_sample();
+        let fillet = app.session.doc.features.iter().find(|f| f.name == "Fillet1").unwrap();
+        let error = app.session.model.result(fillet.id).and_then(|r| r.error.clone()).unwrap();
+        let latest = app.session.doc.features.iter().rev().find(|f| reportable(f)).unwrap();
+        assert_ne!(latest.id, fillet.id, "Fillet1 must not be the latest operation");
+        assert!(app.session.selection.is_empty());
+        let at = crate::now_ms() - 125_000.0;
+        for i in 0..12 {
+            app.messages.push(&format!("message number {i:02}"), i % 2 == 0, at);
+        }
+        app.messages.push("message number 11", false, at);
+        let draft = draft_for(&app, None, None);
+        let line = format!("Feature {} \"Fillet1\" (FilletFeature): {:?}", fillet.id, error);
+        assert!(draft.body.contains("Failing features (1):") && draft.body.contains(&line), "missing {line}: {}", draft.body);
+        assert!(draft.body.contains("Messages (last 8 of 12):"), "{}", draft.body);
+        for i in 0..4 {
+            assert!(!draft.body.contains(&format!("message number {i:02}")), "only the last 8 messages: {}", draft.body);
+        }
+        assert!(draft.body.contains("2 min ago error: \"message number 10\"\n"), "{}", draft.body);
+        assert!(draft.body.contains("2 min ago info: \"message number 11\" (×2)\n"), "{}", draft.body);
+        let latest = draft.body.find("Latest modeling operation").unwrap();
+        assert!(latest < draft.body.find("Failing features").unwrap() && latest < draft.body.find("Messages (").unwrap());
+        assert!(draft.body.find("Messages (").unwrap() < draft.body.find("## Environment").unwrap());
+    }
+
+    #[test]
+    fn issue_report_messages_and_feature_errors_hide_the_home_folder_and_stay_bounded() {
+        assert_eq!(report_text("Could not write /home/sample/Designs/part.step", Some("/home/sample")), "\"Could not write ~/Designs/part.step\"");
+        assert_eq!(report_text("/home/sample", Some("/")), "\"/home/sample\"", "a bare root is never replaced");
+        let mut app = app();
+        if let Some(home) = home_text() {
+            app.messages.push(&format!("Export failed: {home}/Designs/part.step is read-only"), true, crate::now_ms());
+            let draft = draft_for(&app, None, None);
+            assert!(draft.body.contains("error: \"Export failed: ~/Designs/part.step is read-only\""), "{}", draft.body);
+            assert!(!draft.body.contains(&home), "the home folder leaks: {}", draft.body);
+        }
+        for i in 0..12 {
+            app.run("solid.box", json!({"length":10,"width":10,"height":10,"body_name":format!("Box{i}")})).unwrap();
+        }
+        let hostile = "錯誤 ```\n## fake section 🚀".repeat(50_000);
+        for result in &mut app.session.model.results {
+            result.error = Some(hostile.clone());
+        }
+        app.messages.push(&hostile, true, f64::NAN);
+        let draft = draft_for(&app, None, None);
+        assert!(draft.body.len() <= MAX_BODY);
+        assert!(draft.body.contains("Failing features (first 10 of 12):"), "{}", draft.body);
+        assert!(!draft.body.contains("\n## fake section"), "untrusted text stays on one quoted line");
+        let section = draft.body.split("Failing features").nth(1).unwrap();
+        let section = section.split("\n## Environment").next().unwrap();
+        assert_eq!(section.lines().filter(|l| l.contains("錯誤")).count(), 11, "ten features and one message");
+        for line in section.lines() {
+            assert!(line.chars().count() < 2 * MAX_ENTRY_CHARS, "an entry is bounded: {} characters", line.chars().count());
+        }
+        assert!(section.contains("0 s ago error: \"錯誤"), "a broken time still reads: {section}");
     }
 
     #[test]
@@ -1279,6 +1471,74 @@ mod tests {
         receive(&mut app, token, image);
         let draft = app.issue_report.draft.as_ref().unwrap();
         assert!(draft.image.is_none() && draft.note.contains("changed"));
+    }
+
+    /// A 6K display's frame, 20.4 million pixels, is over the limit: the report keeps it at half
+    /// size instead of refusing it (#7091).
+    #[test]
+    fn issue_report_capture_keeps_a_frame_over_the_limit_scaled_down() {
+        let mut app = app();
+        let ctx = crate::fonts::test_context();
+        begin(&mut app, &ctx, None, None);
+        // As the app's window device has it (vendor/egui-wgpu asks for at least 8192).
+        app.issue_report.pending.as_mut().unwrap().max_side = 8192;
+        let token = app.issue_report.pending.as_ref().unwrap().token;
+        let [w, h] = [6016, 3384];
+        let pixels = (0..w * h).map(|i| if i % w < w / 2 { egui::Color32::RED } else { egui::Color32::BLUE }).collect();
+        receive(&mut app, token, Arc::new(ColorImage::new([w, h], pixels)));
+        let draft = app.issue_report.draft.as_ref().unwrap();
+        assert!(draft.note.contains("captured"), "{}", draft.note);
+        let image = draft.image.as_ref().expect("the report keeps a screenshot");
+        assert_eq!(image.size, [3008, 1692]);
+        // The halves still meet in the middle.
+        assert_eq!(
+            [image.pixels[0], image.pixels[1503], image.pixels[1504], image.pixels[3007]],
+            [egui::Color32::RED, egui::Color32::RED, egui::Color32::BLUE, egui::Color32::BLUE]
+        );
+    }
+
+    /// Three ultrawide screens side by side, 10320 × 1440: under the pixel limit, but wider than
+    /// the GPU can make a texture. The preview's upload would fail and the window's device panic
+    /// on it; here, where the limit is egui's default 2048, egui's own check panicked.
+    #[test]
+    fn issue_report_preview_of_a_frame_wider_than_a_texture_fits_the_gpu() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        let ctx = h.ctx.clone();
+        begin(&mut h.app, &ctx, None, None);
+        let token = h.app.shot_token;
+        receive(&mut h.app, token, Arc::new(ColorImage::new([10_320, 1440], vec![egui::Color32::GREEN; 10_320 * 1440])));
+        h.frames(4);
+        let max_side = h.ctx.input(|i| i.max_texture_side);
+        let draft = h.app.issue_report.draft.as_ref().unwrap();
+        let size = draft.image.as_ref().expect("the report keeps a screenshot").size;
+        assert!(size[0] <= max_side && size[1] <= max_side, "{size:?} over {max_side}");
+        assert!(draft.texture.is_some(), "the preview is drawn");
+    }
+
+    #[test]
+    fn a_frame_over_the_limit_is_averaged_down_by_a_whole_factor() {
+        let frame = |[w, h]: [usize; 2], colour: &dyn Fn(usize, usize) -> egui::Color32| {
+            Arc::new(ColorImage::new([w, h], (0..w * h).map(|i| colour(i % w, i / w)).collect()))
+        };
+        let small = frame([4, 3], &|_, _| egui::Color32::GREEN);
+        assert!(Arc::ptr_eq(&fitted(small.clone(), 12, 4).unwrap(), &small), "a frame within the limits is kept as it is");
+        // 15 pixels over a limit of 6: by 2, into 3 × 2; the last column and row average the
+        // pixels they cover.
+        let grey = egui::Color32::from_gray;
+        let checks = frame([5, 3], &|x, y| grey(if (x + y) % 2 == 0 { 0 } else { 200 }));
+        let image = fitted(checks, 6, 16).unwrap();
+        assert_eq!(image.size, [3, 2]);
+        assert_eq!(image.pixels, [grey(100), grey(100), grey(100), grey(100), grey(100), grey(0)]);
+        // A long strip goes down by the factor its area or its length needs: 1000 × 2 into 4
+        // pixels is by 250, and into a side of 300 by 4.
+        let strip = frame([1000, 2], &|_, _| egui::Color32::GREEN);
+        assert_eq!(fitted(strip.clone(), 4, 16).unwrap().size, [4, 1]);
+        assert_eq!(fitted(strip, 10_000, 300).unwrap().size, [250, 1]);
+        let mut short = ColorImage::new([2, 2], vec![egui::Color32::GREEN; 4]);
+        short.pixels.pop();
+        assert!(fitted(Arc::new(short), 16, 16).is_none(), "a frame with fewer pixels than its size is refused");
+        assert!(fitted(Arc::new(ColorImage::new([0, 0], vec![])), 16, 16).is_none());
     }
 
     #[test]

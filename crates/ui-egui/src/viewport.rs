@@ -1538,17 +1538,7 @@ fn build_sketch_scene(app: &SolveApp, proj: &Proj) -> GpuScene {
         for (pts, col, cons) in sketch_lines_with_sampler(&ss.sketch, &ss.plane, active, &ss.report.curve_determined, |_, index, plane| {
             crate::sketch_display::curve_sample(app, sid, index, plane, proj).parts.clone()
         }) {
-            let segs = sketch_segments(
-                &pts,
-                if !cons {
-                    0
-                } else if col == colors::SKETCH_CENTERLINE {
-                    2
-                } else {
-                    1
-                },
-                unit,
-            );
+            let segs = sketch_segments(&pts, sketch_line_mode(col, cons), unit);
             let haloed = app.preferences.sketch_halo && !active && col != colors::SKETCH_PROJECTED && col != colors::SKETCH_LOST;
             strokes.push((segs, sc.color(sketch_color(&tk, col)), if cons { 1.2 } else { 2.0 }, haloed));
         }
@@ -1626,6 +1616,18 @@ fn ground_shadow(sc: &mut GpuScene, app: &SolveApp, st: &std::sync::Arc<solidcra
                 sc.shadow_tri(p01, c0);
             }
         }
+    }
+}
+
+/// The [`sketch_segments`] line type of a [`sketch_lines_with_sampler`] polyline: solid,
+/// construction (dashed) or centerline (dash-dot).
+fn sketch_line_mode(col: Rgb, cons: bool) -> u8 {
+    if !cons {
+        0
+    } else if col == colors::SKETCH_CENTERLINE {
+        2
+    } else {
+        1
     }
 }
 
@@ -2468,6 +2470,23 @@ fn feature_parts(app: &SolveApp, id: u64, shown_only: bool) -> Vec<Sel> {
     out
 }
 
+/// The sketches picked among `items` (a sketch row in the Browser or the timeline) that the
+/// highlight draws, shown or hidden (#7156). The sketch being edited shows its own selection.
+fn selected_sketches(app: &SolveApp, items: &[Sel]) -> Vec<u64> {
+    let st = crate::open_meshing::shown_world(app);
+    let mut out = Vec::new();
+    for item in items {
+        if let Sel::Feature { id } = item
+            && app.session.active_sketch != Some(*id)
+            && st.sketch(*id).is_some()
+            && !out.contains(id)
+        {
+            out.push(*id);
+        }
+    }
+    out
+}
+
 fn displayed_selection(app: &SolveApp, item: &Sel) -> Vec<Sel> {
     match item {
         Sel::Feature { id } => feature_geometry(app, *id),
@@ -2683,6 +2702,18 @@ fn tool_hover(app: &SolveApp, hits: &[Hit]) -> Option<Hit> {
     hits.iter().find(|h| crate::sketch_tools::takes(cmd, h)).cloned()
 }
 
+/// A sketch annotation under either a left-click or a context-menu click. Dimension text
+/// wins over geometry; dimension lines yield to points and curves, and glyphs to midpoints.
+pub(crate) fn sketch_constraint_at(app: &SolveApp, pos: Pos2, hit: Option<&Hit>) -> Option<Sel> {
+    app.session.active_sketch?;
+    let off = |kind: &str| app.ui.pick_off.iter().any(|x| x == kind);
+    let on_geometry = matches!(hit, Some(Hit::SketchPoint { .. } | Hit::SketchMidpoint { .. } | Hit::SketchCurve { .. }));
+    let dimension =
+        crate::dim_view::hit_text(pos).or_else(|| if on_geometry { None } else { crate::dim_view::hit(pos) }).filter(|_| !off("dimensions"));
+    let glyph = crate::sketch_tools::glyph_at(pos).filter(|_| !off("constraints") && !matches!(hit, Some(Hit::SketchMidpoint { .. })));
+    dimension.or(glyph).map(|id| Sel::SketchConstraint { id })
+}
+
 /// What a click would pick: the first hit the open dialog's active input accepts, or with no
 /// dialog the first hit (sketch entities only belong to the active sketch).
 pub fn candidate(app: &SolveApp, hits: &[Hit]) -> Option<(Hit, Sel)> {
@@ -2817,17 +2848,34 @@ const SKETCH_HALO_WIDTH: f32 = 2.0;
 
 /// A highlighted edge: a halo and a core, and where the model hides it, the core dimmed (so a
 /// pick on the far side still shows).
-fn edge_lines(sc: &mut GpuScene, e: &[Vec3], core: Color32, halo: Color32, w: f32, normals: &[[[f32; 3]; 2]]) {
-    for (col, width) in [(halo, w + 3.0), (core, w)] {
-        let col = sc.color(c4(col));
+/// The palette entries of a highlighted edge: its halo, its core, and its dimmed part where the
+/// model hides it. Interned once for every edge drawn in them.
+#[derive(Clone, Copy)]
+struct EdgeColours {
+    halo: crate::gpu::PaletteIndex,
+    core: crate::gpu::PaletteIndex,
+    hidden: crate::gpu::PaletteIndex,
+}
+
+impl EdgeColours {
+    fn new(sc: &mut GpuScene, core: Color32, halo: Color32) -> EdgeColours {
+        EdgeColours { halo: sc.color(c4(halo)), core: sc.color(c4(core)), hidden: sc.color(c4(core.gamma_multiply(0.45))) }
+    }
+}
+
+fn edge_lines(sc: &mut GpuScene, e: &[Vec3], cols: EdgeColours, w: f32, normals: &[[[f32; 3]; 2]]) {
+    let segments = e.len().saturating_sub(1);
+    sc.reserve_lines(2 * segments, segments);
+    for (col, width) in [(cols.halo, w + 3.0), (cols.core, w)] {
+        // Segments without their faces' normals share one width word.
+        let flat = crate::gpu::lifted_width(width, [[0.0; 3]; 2]);
         for (i, p) in e.windows(2).enumerate() {
-            let n = normals.get(i).copied().unwrap_or_default();
-            sc.lifted_line(p[0].to_f32(), p[1].to_f32(), col, width, n);
+            let word = normals.get(i).map_or(flat, |n| crate::gpu::lifted_width(width, *n));
+            sc.lifted_line_word(p[0].to_f32(), p[1].to_f32(), col, word);
         }
     }
-    let hidden = sc.color(c4(core.gamma_multiply(0.45)));
     for p in e.windows(2) {
-        sc.hidden_line(p[0].to_f32(), p[1].to_f32(), hidden, (w * 0.7).max(1.0));
+        sc.hidden_line(p[0].to_f32(), p[1].to_f32(), cols.hidden, (w * 0.7).max(1.0));
     }
 }
 
@@ -2996,7 +3044,8 @@ fn highlight_key(app: &SolveApp) -> u64 {
     // Body triangles and outlines live in world space; the GPU applies the new camera.
     // Only sketch feedback needs projected tessellation and the profile's lift toward the eye.
     let projected = selected.iter().any(|s| matches!(s, Sel::Profile { .. } | Sel::SketchCurve { .. } | Sel::ExternalSketchCurve { .. }))
-        || matches!(app.viewport.hover, Some(Hit::Profile { .. }));
+        || matches!(app.viewport.hover, Some(Hit::Profile { .. }))
+        || !selected_sketches(app, &selected).is_empty();
     if projected {
         crate::sketch_display::projection_key(&display_proj(app), app.viewport.pixels_per_point()).hash(&mut h);
     }
@@ -3195,9 +3244,11 @@ pub(crate) fn build_highlight(app: &SolveApp) -> GpuScene {
     let active_bodies = s.active_occurrence_path.as_ref().and_then(|p| s.occurrence_bodies(p, true).ok());
     // Faces lit over the model use the triangles the model shows them with.
     let shown = |b: &solidcraft_engine::doc::ModelBody| shown_mesh(app, b, &active_bodies);
+    let items = app.highlighted();
+    let sketches = selected_sketches(app, &items);
     let mut sel = Vec::new();
-    for item in app.highlighted() {
-        for piece in displayed_selection(app, &item) {
+    for item in &items {
+        for piece in displayed_selection(app, item) {
             if !sel.iter().any(|x| crate::selection::same_item(x, &piece)) {
                 sel.push(piece);
             }
@@ -3289,7 +3340,8 @@ pub(crate) fn build_highlight(app: &SolveApp) -> GpuScene {
     }
     // Reference widgets follow zoom; the often much larger world-space feedback does not.
     let projected = sel.iter().any(|s| matches!(s, Sel::Profile { .. } | Sel::SketchCurve { .. } | Sel::ExternalSketchCurve { .. }))
-        || matches!(hover, Some(Hit::Profile { .. }));
+        || matches!(hover, Some(Hit::Profile { .. }))
+        || !sketches.is_empty();
     if !projected
         && let Some(cached) = app.viewport.hover_block.lock().ok().and_then(|cache| {
             cache.as_ref().filter(|c| c.key == key && std::sync::Arc::ptr_eq(&c.state, &st) && std::sync::Arc::ptr_eq(&c.doc, &s.doc)).cloned()
@@ -3307,6 +3359,8 @@ pub(crate) fn build_highlight(app: &SolveApp) -> GpuScene {
         return sc;
     }
     let mut feedback = GpuScene { palette: std::sync::Arc::new((*sc.palette).clone()), ..Default::default() };
+    let (hover_edge, selected_edge) =
+        (EdgeColours::new(&mut feedback, t.hover_edge, t.hover_edge_halo), EdgeColours::new(&mut feedback, t.sel_edge, t.sel_edge_rim));
     let mut hover_instances = HighlightInstances::default();
     let mut selected_instances = HighlightInstances::default();
     // Selected things.
@@ -3337,7 +3391,7 @@ pub(crate) fn build_highlight(app: &SolveApp) -> GpuScene {
                 {
                     let m = drawn_mesh(app, b);
                     if let Some(e) = edge_of(&m, *index, *point) {
-                        edge_lines(&mut feedback, e, t.sel_edge, t.sel_edge_rim, 3.0, &edge_normals(&m, e));
+                        edge_lines(&mut feedback, e, selected_edge, 3.0, &edge_normals(&m, e));
                     }
                 }
             }
@@ -3386,6 +3440,19 @@ pub(crate) fn build_highlight(app: &SolveApp) -> GpuScene {
                 }
             }
             _ => {}
+        }
+    }
+    // A sketch picked in the Browser or the timeline: all its curves in their line types, over
+    // the model, also while the sketch is hidden or inside a body, so it is easy to find.
+    let (unit, proj) = (grid_step(app.cam.half_height()).0, display_proj(app));
+    let sel_edge = feedback.color(c4(t.sel_edge));
+    for ss in sketches.iter().filter_map(|id| st.sketch(*id)) {
+        for (pts, col, cons) in sketch_lines_with_sampler(&ss.sketch, &ss.plane, false, &[], |_, index, plane| {
+            crate::sketch_display::curve_sample(app, ss.feature, index, plane, &proj).parts.clone()
+        }) {
+            for (a, b) in sketch_segments(&pts, sketch_line_mode(col, cons), unit) {
+                feedback.line(a.to_f32(), b.to_f32(), sel_edge, 3.5, true);
+            }
         }
     }
     // Timeline modifiers light only their resulting faces; browser rows light whole bodies.
@@ -3440,7 +3507,7 @@ pub(crate) fn build_highlight(app: &SolveApp) -> GpuScene {
         }
         for (ei, e) in m.edges.iter().enumerate() {
             if m.edge_pickable(ei) && (whole || m.edge_faces.get(ei).is_some_and(|fs| fs.iter().any(|f| faces.contains(&(*f as usize))))) {
-                edge_lines(&mut feedback, e, t.hover_edge, t.hover_edge_halo, 1.5, &[]);
+                edge_lines(&mut feedback, e, hover_edge, 1.5, &[]);
             }
         }
     }
@@ -3477,7 +3544,7 @@ pub(crate) fn build_highlight(app: &SolveApp) -> GpuScene {
                     if let Some(p) = m.edges.get(e)
                         && m.edge_pickable(e)
                     {
-                        edge_lines(&mut feedback, p, t.hover_edge, t.hover_edge_halo, 1.5, &[]);
+                        edge_lines(&mut feedback, p, hover_edge, 1.5, &[]);
                     }
                 }
             }
@@ -3489,7 +3556,7 @@ pub(crate) fn build_highlight(app: &SolveApp) -> GpuScene {
                 for i in m.circular_rim(*index) {
                     let selected = sel.iter().any(|x| matches!(x, Sel::Edge { body: b, index: j, .. } if b == body && *j == i));
                     if !selected && let Some(e) = if i == *index { edge_of(&m, i, *mid) } else { m.edges.get(i) } {
-                        edge_lines(&mut feedback, e, t.hover_edge, t.hover_edge_halo, 2.0, &edge_normals(&m, e));
+                        edge_lines(&mut feedback, e, hover_edge, 2.0, &edge_normals(&m, e));
                     }
                 }
             }
@@ -3999,23 +4066,12 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
                     app.dialog = Some(dialog);
                 }
             } else {
-                // Dimensions and constraint glyphs sit on top of the geometry.
-                let off = |k: &str| app.ui.pick_off.iter().any(|x| x == k);
-                let sketching = app.session.active_sketch.is_some();
-                // A dimension's text wins; its lines only where no sketch point or curve is (a
-                // diameter's line runs through the centre point).
-                let on_geometry =
-                    matches!(cand.as_ref().map(|c| &c.0), Some(Hit::SketchPoint { .. } | Hit::SketchMidpoint { .. } | Hit::SketchCurve { .. }));
-                let on_dim = crate::dim_view::hit_text(p)
-                    .or_else(|| if on_geometry { None } else { crate::dim_view::hit(p) })
-                    .filter(|_| sketching && !off("dimensions"));
-                let on_midpoint = matches!(cand.as_ref().map(|c| &c.0), Some(Hit::SketchMidpoint { .. }));
-                let on_glyph = crate::sketch_tools::glyph_at(p).filter(|_| sketching && !off("constraints") && !on_midpoint);
+                let annotation = sketch_constraint_at(app, p, cand.as_ref().map(|c| &c.0));
                 if crate::sketch_text_handles::over(app, &proj, p) {
                     // A text's resize or rotation handle: the text stays selected.
                 } else if !crate::sketch3d::click(app, &proj, p) {
-                    match on_dim.or(on_glyph) {
-                        Some(id) => select(app, Some(Sel::SketchConstraint { id }), add, allow_toggle),
+                    match annotation {
+                        Some(sel) => select(app, Some(sel), add, allow_toggle),
                         // Clicking again on the same spot selects the next thing under it (not
                         // the second click of a double-click, which has its own actions).
                         None if !add && !resp.double_clicked() && crate::select_other::cycle_click(app, &proj, p) => {}
@@ -6651,6 +6707,51 @@ mod tests {
             assert!(selection_bounds(&h.app).is_none());
             assert!(build_highlight(&h.app).merged().tris.is_empty());
         }
+    }
+
+    /// A sketch picked in the timeline or the Browser lights all its curves in the selection
+    /// colour, also while it is hidden (#7156); nothing is lit once it is no longer picked.
+    #[test]
+    fn a_picked_sketch_lights_its_curves_shown_or_hidden() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.set_origin_shown(false);
+        h.app.run("solid.box", json!({"length":20,"width":20,"height":20})).unwrap();
+        h.app.run("sketch.create", json!({"plane":"XY","name":"Outline"})).unwrap();
+        h.app.run("sketch.rectangle.two_point", json!({"p0":[30,0],"p1":[40,10]})).unwrap();
+        h.app.run("sketch.circle.center", json!({"center":[35,5],"radius":3,"construction":true})).unwrap();
+        h.app.run("sketch.finish", json!({})).unwrap();
+        let id = h.app.session.doc.find_feature("Outline").unwrap().id;
+        h.frames(2);
+        let sel_edge = c4(Tokens::get().sel_edge);
+        // The selection-coloured strokes of the highlight, drawn over the model (a line holds its
+        // colour's palette index).
+        let lit = |app: &SolveApp| {
+            let scene = build_highlight(app).merged();
+            scene
+                .overlay
+                .as_chunks::<{ crate::gpu::LINE_SIZE }>()
+                .0
+                .iter()
+                .filter(|line| {
+                    let index = line.get(24..28).and_then(|b| b.try_into().ok()).map_or(0, u32::from_le_bytes);
+                    scene.palette.get(crate::gpu::PaletteIndex(index)) == Some(sel_edge)
+                })
+                .count()
+        };
+        assert_eq!(lit(&h.app), 0, "nothing is picked");
+        let p = crate::scenario::handle_at("timeline:Outline").unwrap();
+        h.step(&json!({"click":[p.x,p.y]})).unwrap();
+        assert_eq!(h.app.session.selection, vec![Sel::Feature { id }]);
+        let shown = lit(&h.app);
+        // Four sides, the circle's many segments and its dashes.
+        assert!(shown > 20, "the picked sketch's curves are lit: {shown}");
+        h.app.session.visibility.hidden_sketches.push(id);
+        assert!(!visible_sketches(&h.app).contains(&id));
+        assert_eq!(lit(&h.app), shown, "a hidden sketch is lit too");
+        h.app.session.selection = vec![Sel::Feature { id: h.app.session.doc.features[0].id }];
+        assert_eq!(lit(&h.app), 0, "another feature picked");
+        h.app.session.selection.clear();
+        assert_eq!(lit(&h.app), 0, "nothing is picked");
     }
 
     #[test]

@@ -326,7 +326,9 @@ mod tests {
             let pending: BTreeMap<String, Messages> = serde_json::from_str(&std::fs::read_to_string(entry.path()).unwrap()).unwrap();
             for (locale, messages) in pending {
                 for (id, text) in messages {
-                    assert_eq!(Locale::for_language(&locale).text(&id), text, "{locale}: {id}");
+                    // The catalogs hand right-to-left text out in display order (`crate::bidi`);
+                    // pending files hold it in reading order, as the catalogs do (#7527).
+                    assert_eq!(Locale::for_language(&locale).text(&id), crate::bidi::visual_template(&text), "{locale}: {id}");
                 }
             }
         }
@@ -436,7 +438,7 @@ mod tests {
     /// are kept partial so a new label doesn't need more translations), so their gaps fall back
     /// to English and are reported by `cargo xtask i18n` without failing the build, while
     /// nothing in the complete catalogs may regress.
-    const COMPLETE: &[&str] = &["ar", "he", "ja", "zh"];
+    const COMPLETE: &[&str] = &["ar", "he", "ja", "vi", "zh"];
 
     /// `text()` falls back to English silently, so a message a complete locale never received is
     /// shown in English inside an otherwise translated UI, with nothing in the build to say so.
