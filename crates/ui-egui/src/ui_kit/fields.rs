@@ -168,6 +168,7 @@ pub(crate) fn searchable_dropdown(
     custom: Option<&str>,
     pending: Option<&str>,
 ) -> Option<String> {
+    crate::prefs_search::note_current(ui, current);
     let mut chosen = None;
     let row = label(ui).to_owned();
     let response = egui::ComboBox::from_id_salt(id)
@@ -270,7 +271,7 @@ pub(crate) fn dropdown(ui: &mut Ui, id: &str, selected: &mut usize, options: &[&
     dropdown_menu(ui, id, text, |ui| {
         for (index, option) in options.iter().enumerate() {
             let response = ui.selectable_value(selected, index, crate::i18n::tr_label(option));
-            scenario::publish_handle(&format!("dialog:{row}:{option}"), response.rect.center());
+            scenario::publish_target(&format!("dialog:{row}:{option}"), response.rect);
         }
     })
 }
@@ -290,6 +291,14 @@ pub(crate) fn dropdown_menu_with_close_behavior(
     close_behavior: egui::PopupCloseBehavior,
     add: impl FnOnce(&mut Ui),
 ) -> Response {
+    crate::prefs_search::note_current(ui, current);
+    // Only a search probe may skip the real control. A dialog's first frame is not visible yet,
+    // and a stand-in there makes the next frame too short to show OK.
+    if crate::prefs_search::querying(ui)
+        && (!ui.is_visible() || (crate::prefs_search::suppress_chrome(ui) && !crate::prefs_search::texts_hit(ui, &[current])))
+    {
+        return crate::prefs_search::hidden_response(ui);
+    }
     let response = egui::ComboBox::from_id_salt(id)
         .width(dimension(ui.available_width()))
         .height(Tokens::get().space_24 * 14.0)
@@ -313,17 +322,21 @@ pub(crate) fn selection_field(ui: &mut Ui, text: &str, options: Selection) -> Re
     let Selection { active, filled } = options;
     let t = Tokens::get();
     let (rect, response) = ui.allocate_exact_size(vec2(dimension(ui.available_width()), row_height()), egui::Sense::CLICK);
-    if active && !filled {
+    // A separate action fill lets two-colour palettes reserve the focus accent for inverted ink.
+    let inverted = t.form_primary_fill != t.form_primary;
+    if active && !filled && !inverted {
         ui.painter().rect_filled(rect, t.control_radius, t.selected_bg);
     }
     let (fill, border) = match (active, filled) {
+        (true, _) if inverted => (t.selected_bg, t.form_primary),
+        (false, _) if inverted => (t.control_fill, t.control_border),
         (true, true) => (t.selected_bg, t.form_primary),
         (true, false) => (t.control_fill, t.form_primary),
         (false, true) => (t.control_fill.lerp_to_gamma(t.form_ink, 0.06), t.control_border.lerp_to_gamma(t.form_ink, 0.35)),
         (false, false) => (t.control_fill, t.control_border),
     };
     ui.painter().rect(
-        if active && !filled { rect.shrink(t.space_2) } else { rect },
+        if active && !filled && !inverted { rect.shrink(t.space_2) } else { rect },
         t.control_radius,
         fill,
         match (active, filled) {
@@ -345,6 +358,7 @@ pub(crate) fn selection_field(ui: &mut Ui, text: &str, options: Selection) -> Re
         text,
         crate::fonts::medium(t.font_label),
         match (active, filled) {
+            (true, _) if inverted => t.selected_ink,
             (true, true) => t.selected_ink,
             (false, true) => t.form_ink,
             _ => t.form_dim,
@@ -463,6 +477,9 @@ impl Default for Slider {
 /// Native input, keyboard routing, enabled state and accessibility; one token-painted track/thumb.
 /// Tokens: control_height, space_24/8/4/2, dialog_body/rule, control_fill, form_primary.
 pub(crate) fn slider<T: egui::emath::Numeric>(ui: &mut Ui, value: &mut T, range: std::ops::RangeInclusive<T>, options: Slider) -> Response {
+    if crate::prefs_search::suppress_chrome(ui) {
+        return crate::prefs_search::hidden_response(ui);
+    }
     // Own form styling even in callers such as the viewport menu which have no kit scope.
     super::scope(ui, |ui| {
         let t = Tokens::get();
@@ -493,6 +510,12 @@ pub(crate) fn slider<T: egui::emath::Numeric>(ui: &mut Ui, value: &mut T, range:
             widget = widget.integer();
         }
         let response = ui.add(widget);
+        if ui.ctx().memory(|memory| memory.focused()).is_some_and(|id| {
+            ui.ctx().read_response(id).is_some_and(|focused| response.rect.contains(focused.rect.center()))
+                || egui::TextEdit::load_state(ui.ctx(), id).is_some()
+        }) {
+            crate::prefs_search::note_key_sink(ui.ctx());
+        }
         let slider = egui::Rect::from_min_size(response.rect.min, vec2(ui.spacing().slider_width, response.rect.height()));
         let mut background = ui.painter().clone();
         background.set_opacity(if ui.is_visible() { 1.0 } else { 0.0 });

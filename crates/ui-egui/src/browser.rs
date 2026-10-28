@@ -128,6 +128,9 @@ pub struct TreeState {
     /// Find in Timeline: the feature the history scrolls to the next time it draws its items, in
     /// the bottom strip or in the history on the left (#5850).
     pub timeline_reveal: Option<u64>,
+    /// The feature of the face or edge last picked in the view, so a new pick scrolls the
+    /// history to it once.
+    pub view_pick: Option<u64>,
     /// The Edit Canvas / Calibrate panel.
     pub canvas_panel: Option<CanvasPanel>,
     /// The bodies a row at the top of the history lights this frame (`history_rows`), for the
@@ -355,6 +358,26 @@ pub fn folder_items(app: &SolveApp, component: u64, folder: &str, scope: &str) -
     v.push(Item::action("ui.folderVisible", "Show/Hide", "eye").key("V").with(json!({ "key": format!("{scope}/{folder}") })));
     v.push(Item::action("ui.showAll", "Show All", "eye"));
     v
+}
+
+/// A component's or placement's menu, while its Bodies folder is folded away (#4217), takes the
+/// folder's items it lacks: Create Components from Bodies and Group Selected (New Group and Show
+/// All are on every component's menu).
+pub fn folded_folder_items(app: &SolveApp, target: &Target) -> Vec<Item> {
+    let (comp, scope) = match target {
+        Target::Component { id } => (*id, format!("c{id}")),
+        Target::Occurrence { path } => match app.session.occurrence_placement(path) {
+            Ok(placement) => (placement.component, occurrence_key(path)),
+            Err(_) => return Vec::new(),
+        },
+        _ => return Vec::new(),
+    };
+    if !bodies_folded(app, comp, &scope, entries(app, comp, "bodies").len()) {
+        return Vec::new();
+    }
+    let items =
+        folder_items(app, comp, "bodies", &scope).into_iter().filter(|i| matches!(i.id.as_str(), "component.from_bodies" | "ui.groupSelected"));
+    std::iter::once(Item::sep()).chain(items).collect()
 }
 
 /// The menu of the Origin folder.
@@ -728,9 +751,13 @@ pub(crate) fn reveal_pick(app: &mut SolveApp) {
     }
 }
 
-/// Whether the body being revealed is in this placement or one below it: it opens.
-fn reveals_in_occurrence(app: &SolveApp, path: &[u64]) -> bool {
-    app.tree.reveal.as_ref().is_some_and(|r| app.session.occurrence_bodies(path, true).is_ok_and(|bodies| bodies.contains(r)))
+/// The placement path of the body being revealed, resolved once per model: a row opens when
+/// the body's path runs through it, instead of every row expanding its subtree to test
+/// containment (#7502). `None` when nothing is revealed or the body is a top-level design body.
+fn reveal_path(app: &mut SolveApp) -> Option<Vec<u64>> {
+    let body = app.tree.reveal.clone()?;
+    prepare_model(app);
+    app.tree.model.as_mut()?.body_path(&app.session, &body)
 }
 
 pub(crate) fn is_open(app: &SolveApp, key: &str, default: bool) -> bool {
@@ -954,6 +981,12 @@ pub(crate) fn resize_column(app: &mut SolveApp, ui: &egui::Ui, rect: Rect, width
     crate::scenario::publish_handle(handle, pos2(rect.right() - BROWSER_RAIL / 2.0, rect.center().y));
 }
 
+/// The width of the browser folded to its rail beside a left History.
+pub(crate) fn collapsed_width() -> f32 {
+    let t = Tokens::get();
+    t.space_24 + t.space_10
+}
+
 /// One content-hugging browser; the shared container supplies floating or flush compact chrome.
 pub fn browser(app: &mut SolveApp, ui: &mut egui::Ui) {
     let available = ui.available_rect_before_wrap();
@@ -963,6 +996,11 @@ pub fn browser(app: &mut SolveApp, ui: &mut egui::Ui) {
     DRAWN.with(|d| d.borrow_mut().clear());
     OCCURRENCES.with(|d| d.borrow_mut().clear());
     let mut acts = Actions { hover_bodies: std::mem::take(&mut app.viewport.hover_bodies), ..Default::default() };
+    if crate::render_workspace::active(app) {
+        render_card(app, ui, &mut acts);
+        finish_browser(app, ui, acts);
+        return;
+    }
     let stacked = crate::timeline_left::stacked(app);
     let container =
         Container::new(ui.ctx(), Surface::Panel).joined(crate::ui_kit::DockEdges { left: true, top: true, bottom: stacked, ..Default::default() });
@@ -983,11 +1021,12 @@ pub fn browser(app: &mut SolveApp, ui: &mut egui::Ui) {
     let bounds = if stacked {
         crate::timeline_left::stacked_rects(app, available).0
     } else {
-        panel_bounds(available, if vertical { None } else { app.shell.history }, if collapsed { t.space_24 + t.space_10 } else { width }, gap)
+        panel_bounds(available, if vertical { None } else { app.shell.history }, if collapsed { collapsed_width() } else { width }, gap)
     };
     app.shell.browser = None;
     let min_height = HEADER_H + 2.0 * (CARD_INSET + 1.0);
-    if bounds.is_positive() && bounds.height() >= min_height {
+    // A dialog in the left column holds the browser's place (`dialog_column`).
+    if !crate::dialog_column::holds(app) && bounds.is_positive() && bounds.height() >= min_height {
         let fill = if container.floating() && app.preferences.browser_float { t.panel.gamma_multiply(BROWSER_FLOAT_ALPHA) } else { t.panel };
         let frame = container.frame(ui.ctx(), fill, crate::frame::Side::Left).inner_margin(CARD_INSET as i8);
         let inner_width = (bounds.width() - frame.total_margin().sum().x).max(0.0);
@@ -1024,6 +1063,39 @@ pub fn browser(app: &mut SolveApp, ui: &mut egui::Ui) {
         }
     }
     finish_browser(app, ui, acts);
+}
+
+fn render_card(app: &mut SolveApp, ui: &mut egui::Ui, acts: &mut Actions) {
+    let bounds = crate::shell::panel_bounds(app, ui.available_rect_before_wrap());
+    let mut side = app.preferences.render_browser_side.clone();
+    let mut width = app.preferences.render_browser_width;
+    let title = app.tr("ui.browser_title").to_string();
+    let content = crate::ui_kit::Panel::workspace(
+        ui,
+        crate::ui_kit::WorkspaceOptions { id: "render:browser", title: &title, icon: "list", bounds, fill_height: true },
+        &mut side,
+        &mut width,
+        |ui| {
+            browser_contents(app, ui, acts, true);
+        },
+    );
+    app.preferences.render_browser_width = width;
+    let requested =
+        content.as_ref().and_then(|c| c.inner.1).map(str::to_string).or_else(|| (app.preferences.render_browser_side != side).then(|| side.clone()));
+    if let Some(side) = requested {
+        let _ = app.run("view.render_dock", serde_json::json!({"panel":"browser","side":side}));
+    }
+    let rect = content.map(|c| c.response.rect);
+    app.shell.browser = rect;
+    crate::shell::register_panel(
+        app,
+        "render:browser",
+        rect,
+        Some(if side == "left" { crate::ui_kit::Edge::Left } else { crate::ui_kit::Edge::Right }),
+    );
+    if let Some(rect) = rect {
+        crate::scenario::publish_rect("browser:card", rect);
+    }
 }
 
 fn browser_collapsed_rail(app: &mut SolveApp, ui: &mut egui::Ui) {
@@ -1063,9 +1135,13 @@ pub(crate) fn panel_bounds(available: Rect, history: Option<Rect>, width: f32, g
 fn browser_contents(app: &mut SolveApp, ui: &mut egui::Ui, acts: &mut Actions, collapsible: bool) {
     let t = Tokens::get();
     // Only the floating card folds; the docked column keeps its full height.
-    browser_header(app, ui, collapsible);
-    let stacked = crate::timeline_left::stacked(app);
-    if collapsible
+    let render = crate::render_workspace::active(app);
+    if !render {
+        browser_header(app, ui, collapsible);
+    }
+    let stacked = !render && crate::timeline_left::stacked(app);
+    if !render
+        && collapsible
         && (if stacked {
             (app.preferences.timeline_left_browser_collapsed && app.shell.history_folding.is_none_or(|p| p[0] >= 1.0))
                 || ui.available_height() <= t.space_3
@@ -1307,10 +1383,13 @@ fn component_rows_inner(
     root: &mut cache::Node,
 ) {
     let key = &root.key;
-    if let Some(body) = app.tree.reveal.as_ref()
-        && (cache.root_bodies.contains(body) || root.children.iter().any(|path| reveals_in_occurrence(app, path)))
-    {
-        app.tree.collapsed.remove(key);
+    let reveal = app.tree.reveal.clone();
+    if let Some(body) = reveal.as_ref() {
+        let reveals =
+            cache.root_bodies.contains(body) || reveal_path(app).is_some_and(|rp| root.children.iter().any(|path| rp.starts_with(path.as_slice())));
+        if reveals {
+            app.tree.collapsed.remove(key);
+        }
     }
     let open = is_open(app, key, true);
     let active = app.session.active_component == id;
@@ -1446,7 +1525,7 @@ fn occurrence_rows_inner(
     placement: &mut cache::Node,
 ) {
     let key = &placement.key;
-    if reveals_in_occurrence(app, path) {
+    if reveal_path(app).is_some_and(|rp| rp.starts_with(path)) {
         app.tree.collapsed.remove(key);
     }
     let open = is_open(app, key, true);
@@ -1642,7 +1721,8 @@ fn origin_rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &Actio
         return;
     }
     for (k, icon, thing) in items {
-        let label = k;
+        // An origin plane by the name the preferences give it; its key stays the id.
+        let label = app.preferences.origin_plane_names.label(k);
         let visible = !app.session.visibility.hidden_origin.iter().any(|h| h == k);
         let sel = match icon {
             "plane" => Some(Sel::Plane { name: k.into() }),
@@ -1653,8 +1733,19 @@ fn origin_rows(app: &mut SolveApp, ui: &mut egui::Ui, depth: usize, acts: &Actio
         let r = draw_row(
             ui,
             ui.id().with(("o", k)),
-            // Faded when hidden itself or with the whole Origin.
-            &Row { depth: depth + 1, eye: Some(visible), icon, label, selected, dim: !visible || !app.origin_shown(), mark, ..Default::default() },
+            // Faded when hidden itself or with the whole Origin. A renamed plane's label is already
+            // in the interface's language (`name`).
+            &Row {
+                depth: depth + 1,
+                eye: Some(visible),
+                icon,
+                label,
+                name: label != k,
+                selected,
+                dim: !visible || !app.origin_shown(),
+                mark,
+                ..Default::default()
+            },
         );
         if r.eye {
             // Through the command, so the Origin row's eye is an undo step (#2219).
@@ -2205,6 +2296,22 @@ fn folder_static(folder: &str) -> &'static str {
     }
 }
 
+/// Whether a component's Bodies folder is folded away, its bodies (and groups) listed straight
+/// under the component or placement row (Preferences › Interface › Bodies folders, #4217).
+/// `scope` is that row's tree key (`c{id}`, `o:{path}`) and `bodies` how many items the folder
+/// holds. The design's own folder always stays, and so does a hidden one: its eye is the way back.
+fn bodies_folded(app: &SolveApp, comp: u64, scope: &str, bodies: usize) -> bool {
+    use crate::prefs::BodiesFolders;
+    if comp == 0 || bodies == 0 || app.session.folder_hidden(&format!("{scope}/bodies")) {
+        return false;
+    }
+    match app.preferences.browser_bodies_folders {
+        BodiesFolders::Always => false,
+        BodiesFolders::Several => bodies == 1 && !app.session.doc.browser_groups.iter().any(|g| g.component == comp && g.folder == "bodies"),
+        BodiesFolders::Never => true,
+    }
+}
+
 /// A component's folder: its row, its groups and its items. Rows are drag sources; items,
 /// groups and the folder row are drop targets (reorder, into a group, out of groups).
 #[allow(clippy::too_many_arguments)]
@@ -2234,26 +2341,34 @@ fn folder_rows_at(
             app.tree.collapsed.remove(&format!("g{}", g.id));
         }
     }
-    let open = is_open(app, key, true);
+    // A folded folder draws no row: its groups and items move up into its place, and their own
+    // eyes, hover and drops do its jobs. It is always open, as nothing could open it again.
+    let folded = folder == "bodies" && bodies_folded(app, comp, prefix, data.entries().count());
+    let open = folded || is_open(app, key, true);
+    let inner = if folded { depth } else { depth + 1 };
     // The folder's eye is its own: hiding it hides its items without changing theirs, and its
     // items never change it. It and everything in it fade while it or a placement above is
     // hidden, whatever their own eyes say.
     let shown = !app.session.folder_hidden(key);
     let folder_faded = !shown || path.is_some_and(|p| !app.session.occurrence_visible(p));
-    let r = draw_row(
-        ui,
-        ui.id().with(key),
-        &Row {
-            depth,
-            fold: Some(open),
-            eye: Some(shown),
-            icon: "folder",
-            label: folder_label(folder),
-            dim: folder_faded,
-            mark: acts.lit.branch(app, data.entries()),
-            ..Default::default()
-        },
-    );
+    let r = if folded {
+        RowResp::default()
+    } else {
+        draw_row(
+            ui,
+            ui.id().with(key),
+            &Row {
+                depth,
+                fold: Some(open),
+                eye: Some(shown),
+                icon: "folder",
+                label: folder_label(folder),
+                dim: folder_faded,
+                mark: acts.lit.branch(app, data.entries()),
+                ..Default::default()
+            },
+        )
+    };
     if r.fold {
         toggle(app, key, true);
     } else if r.clicked {
@@ -2298,7 +2413,7 @@ fn folder_rows_at(
             ui,
             ui.id().with(gkey),
             &Row {
-                depth: depth + 1,
+                depth: inner,
                 fold: Some(gopen),
                 eye: Some(gshown),
                 icon: "folder",
@@ -2333,12 +2448,12 @@ fn folder_rows_at(
         }
         if gopen {
             for e in items {
-                entry_row(app, ui, comp, path, fstatic, e, depth + 2, Some(id), loose_keys, group_faded, acts);
+                entry_row(app, ui, comp, path, fstatic, e, inner + 1, Some(id), loose_keys, group_faded, acts);
             }
         }
     }
     for e in &data.loose {
-        entry_row(app, ui, comp, path, fstatic, e, depth + 1, None, loose_keys, folder_faded, acts);
+        entry_row(app, ui, comp, path, fstatic, e, inner, None, loose_keys, folder_faded, acts);
     }
 }
 

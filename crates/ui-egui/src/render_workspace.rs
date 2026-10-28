@@ -204,10 +204,47 @@ fn setup_progress(ui: &mut egui::Ui, app: &SolveApp, started: std::time::Instant
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Stage {
+    #[default]
+    Look,
+    Light,
+    Frame,
+    Output,
+}
+impl Stage {
+    pub(crate) const ALL: [Self; 4] = [Self::Look, Self::Light, Self::Frame, Self::Output];
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::Look => "look",
+            Self::Light => "light",
+            Self::Frame => "frame",
+            Self::Output => "output",
+        }
+    }
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Look => "render.stage_look",
+            Self::Light => "render.stage_light",
+            Self::Frame => "render.stage_frame",
+            Self::Output => "render.stage_output",
+        }
+    }
+    fn page(self) -> inspector::Page {
+        match self {
+            Self::Look => inspector::Page::Appearance,
+            Self::Light => inspector::Page::Lighting,
+            Self::Frame => inspector::Page::Camera,
+            Self::Output => inspector::Page::Output,
+        }
+    }
+}
+
 /// Small per-document editor state; GPU uploads and host capabilities stay outside tabs.
 #[derive(Clone, Debug)]
 pub struct ViewState {
     pub name: String,
+    pub(crate) stage: Stage,
     draft: RenderSetup,
     dirty: bool,
     clean_setup: Option<RenderSetup>,
@@ -262,6 +299,7 @@ impl Default for ViewState {
     fn default() -> Self {
         Self {
             name: "Studio".into(),
+            stage: Stage::Look,
             draft: RenderSetup::default(),
             dirty: false,
             clean_setup: None,
@@ -336,7 +374,7 @@ impl State {
 }
 
 pub fn active(app: &SolveApp) -> bool {
-    app.ui.tab == "RENDER"
+    crate::workspace::render_tab(&app.ui.tab)
 }
 
 pub(crate) fn result_active(app: &SolveApp) -> bool {
@@ -358,7 +396,7 @@ pub(crate) fn inspect_state(app: &SolveApp) -> serde_json::Value {
         ImageMethod::GpuRaytrace => "gpu_path",
     };
     json!({
-        "active": active(app), "setup": view.name, "draft_dirty": view.dirty,
+        "active": active(app), "stage": view.stage.key(), "setup": view.name, "draft_dirty": view.dirty,
         "method": method, "job": view.job, "completed": view.completed,
         "showing_result": view.result, "export_format": if view.studio.export_exr {"exr"} else {"png"},
     })
@@ -437,6 +475,7 @@ pub fn tick(app: &mut SolveApp, ctx: &egui::Context) {
 }
 
 pub fn reset_document(app: &mut SolveApp) {
+    crate::render_ui::reset_shell(app);
     app.ui.ribbon_context = None;
     let host = app.render_workspace.host.clone();
     let image_host = app.render_workspace.image_host.clone();
@@ -478,9 +517,10 @@ pub fn enter(app: &mut SolveApp, render: bool) -> Result<(), String> {
         if !active(app) {
             app.render_workspace.design_camera = Some((app.cam, app.ui.perspective));
             app.ui.tab = "RENDER".into();
+            select_stage(app, app.render_workspace.view.stage.key());
             let scene = solidcraft_engine::product_scene::extract(&app.session).map_err(|e| e.to_string())?;
             if !scene.bounds.is_empty() {
-                app.cam.fit(&scene.bounds);
+                app.fit_bounds(scene.bounds);
             }
         }
         setups::refresh_dirty(app);
@@ -496,9 +536,51 @@ pub fn enter(app: &mut SolveApp, render: bool) -> Result<(), String> {
             app.ui.perspective = perspective;
         }
         app.ui.tab = "MODEL".into();
+        crate::render_ui::reset_shell(app);
     }
-    app.cancel_view_animation();
+    app.viewport.hover = None;
+    app.cam_anim = None;
+    if !render {
+        app.pending_fit = None;
+    }
     Ok(())
+}
+
+/// Stage navigation is transient per-document state. It never applies a resource or starts a job.
+pub(crate) fn select_stage(app: &mut SolveApp, key: &str) {
+    let stage = match key {
+        "look" => Stage::Look,
+        "light" => Stage::Light,
+        "frame" => Stage::Frame,
+        "output" => Stage::Output,
+        _ => return,
+    };
+    app.render_workspace.view.stage = stage;
+    app.render_workspace.view.inspector.page = stage.page();
+    // The current Browser has model folders only. Reveal Objects for Look; scene-specific
+    // Lights/Shots/Output expansion belongs to the scene Browser implementation.
+    if stage == Stage::Look {
+        app.tree.collapsed.remove("c0");
+        app.tree.collapsed.remove("c0/bodies");
+    }
+}
+
+pub(crate) fn switch_shot(app: &mut SolveApp, name: String) {
+    inspector::switch_shot(app, name);
+}
+pub(crate) fn stage_projection(app: &mut SolveApp, perspective: bool) -> Result<(), String> {
+    let mut camera = app.cam;
+    camera.fov = if perspective { 0.6 } else { 0.0 };
+    inspector::apply_camera_draft(app, camera)
+}
+
+pub(crate) fn output_summary(app: &SolveApp) -> (String, &'static str) {
+    let view = &app.render_workspace.view;
+    (format!("{} × {}", view.draft.width, view.draft.height), if view.studio.export_exr { "EXR" } else { "PNG" })
+}
+
+pub(crate) fn job_ready(app: &SolveApp, id: &str) -> Result<(), String> {
+    ribbon::action_ready(app, id)
 }
 
 pub fn panel(app: &mut SolveApp, ui: &mut egui::Ui) {
@@ -1239,7 +1321,7 @@ fn show_result(app: &mut SolveApp, ui: &mut egui::Ui) {
     }
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
     app.viewport.rect = Some(rect);
-    crate::viewport::refresh_layout(app, ui.ctx().pixels_per_point());
+    crate::viewport::refresh_layout(app, ui.ctx());
     let size = [info.width, info.height];
     let scale = app.render_workspace.view.result_scale;
     if scale != ResultScale::Free {
@@ -1288,6 +1370,7 @@ fn show_result(app: &mut SolveApp, ui: &mut egui::Ui) {
     );
     painter.rect_filled(badge, t.control_radius, t.panel);
     painter.galley(badge.min + egui::vec2(t.space_8, t.space_8 * 0.5), label, t.text);
+    crate::navigation_bar_view::show(app, ui, rect);
 }
 
 impl State {
@@ -1342,8 +1425,13 @@ impl State {
 /// on the user-selected background (which may have the opposite theme contrast).
 fn preview_error(app: &mut SolveApp, ui: &mut egui::Ui, rect: egui::Rect, error: &str) {
     let t = Tokens::get();
-    let bounded = rect.shrink(t.space_12);
+    let bounded = crate::shell::workspace_content(app, crate::shell::panel_bounds(app, rect)).shrink(t.space_12);
+    // At tiny window sizes the shell may leave no room for the shared error card.
+    if !bounded.is_finite() || bounded.width() < t.control_height + 2.0 * t.space_8 || bounded.height() < t.control_height + 2.0 * t.space_8 {
+        return;
+    }
     ui.scope_builder(egui::UiBuilder::new().max_rect(bounded), |ui| {
+        ui.set_clip_rect(ui.clip_rect().intersect(bounded));
         ui.set_max_width(bounded.width().min(t.form_card_width * 2.0));
         crate::ui_kit::Panel::feature_frame(ui.ctx(), crate::shell::LayoutMode::Floating, crate::frame::Side::Left).inner_margin(t.space_8).show(
             ui,
@@ -1556,11 +1644,31 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     }
     let rect = ui.max_rect();
     app.viewport.rect = Some(rect);
-    crate::viewport::refresh_layout(app, ui.ctx().pixels_per_point());
+    crate::viewport::refresh_layout(app, ui.ctx());
     let response = ui.interact(rect, ui.id().with("render_preview"), Sense::click_and_drag());
-    // The modelling viewport's camera input (preset, Orbit around, zoom to the cursor, middle
-    // double-click), with nothing to pick or select here.
-    crate::navigation::handle(app, ui, rect, &response, crate::navigation::NavCaps::RENDER);
+    let input = crate::navigation::handle(app, ui, rect, &response, crate::navigation::NavCaps::RENDER);
+    let navigating = input.scroll != 0.0
+        || input.pinch != 1.0
+        || input.pan != egui::Vec2::ZERO
+        || input.middle
+        || input.secondary_down
+        || (input.primary_nav.is_some() && input.primary_down)
+        || input.mode.is_some()
+        || app.viewport.axis_drag.is_some()
+        || app.viewport.spin
+        || app.cam_anim.is_some();
+    let hits = input
+        .hover
+        .filter(|_| input.inside && !navigating)
+        .map(|p| crate::viewport::pick_cached(app, &crate::viewport::projection(app, rect), p))
+        .unwrap_or_default();
+    let candidate = crate::viewport::candidate(app, &hits);
+    app.viewport.hover = candidate.as_ref().map(|(hit, _)| hit.clone());
+    if response.clicked_by(egui::PointerButton::Primary) && input.inside && !navigating {
+        let (add, toggle) =
+            crate::tool_modifiers::selection_click(crate::tool_modifiers::Held::from_modifiers(input.mods), app.preferences.selection_shift_add_only);
+        crate::viewport::select(app, candidate.map(|(_, sel)| sel), add, toggle);
+    }
     let bg = app.render_workspace.view.draft.background;
     ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(bg[0], bg[1], bg[2]));
     let result = (|| -> Result<(), String> {
@@ -1609,6 +1717,14 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         let camera = app.cam;
         let radius = scene.bounds.diagonal().max(10.0) + scene.bounds.center().dist(camera.target);
         let eye = camera.eye();
+        let highlight_key = crate::viewport::highlight_key(app);
+        if highlight_key != app.viewport.hl_key {
+            let overlay = crate::viewport::build_highlight(app);
+            if let Ok(mut slot) = app.viewport.hl_slot.lock() {
+                *slot = Some(overlay);
+            }
+            app.viewport.hl_key = highlight_key;
+        }
         let slot = app.render_workspace.slot.clone();
         let callback = ViewportCallback(Frame {
             product: true,
@@ -1616,8 +1732,8 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             slot: slot.clone(),
             sketch_key: 0,
             sketch_slot: slot.clone(),
-            hl_key: 0,
-            hl_slot: slot.clone(),
+            hl_key: app.viewport.hl_key,
+            hl_slot: app.viewport.hl_slot.clone(),
             pv_key: 0,
             pv_slot: slot,
             pv_hide: false,
@@ -1635,8 +1751,11 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             ao_radius: 0.0,
             eye: [eye.x as f32, eye.y as f32, eye.z as f32, if camera.fov > 0.0 { 1.0 } else { 0.0 }],
             ssaa: if width < full.0 { width as f32 / full.0 as f32 } else { 1.0 },
-            hover_tint: [0.0; 3],
-            selection_tint: [0.0; 3],
+            hover_tint: [f32::from(Tokens::get().hover_face_lift) / 255.0; 3],
+            selection_tint: {
+                let c = Tokens::get().body_selected;
+                [f32::from(c.r()) / 255.0, f32::from(c.g()) / 255.0, f32::from(c.b()) / 255.0]
+            },
         });
         ui.painter().add(egui_wgpu::Callback::new_paint_callback(rect, callback));
         Ok(())
@@ -1645,6 +1764,7 @@ pub fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
         preview_error(app, ui, rect, &error);
     }
     crate::viewport::axis_view(app, ui, rect);
+    crate::navigation_bar_view::show(app, ui, rect);
 }
 
 pub(crate) fn interactive_command_info(app: &SolveApp, command: &solidcraft_engine::CommandSpec) -> solidcraft_engine::CommandInfo {
