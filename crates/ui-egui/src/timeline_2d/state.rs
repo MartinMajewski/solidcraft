@@ -9,12 +9,7 @@ pub enum DragTarget {
     /// Scrubbing the rollback marker head pin across timeline columns.
     Marker,
     /// Dragging a feature action chip horizontally for ripple push reordering.
-    Feature {
-        id: u64,
-        start_col: usize,
-        track_idx: usize,
-        current_pos: Pos2,
-    },
+    Feature { id: u64, start_col: usize, track_idx: usize, current_pos: Pos2 },
     /// Dragging a virtual group chip.
     Group { id: u64, start_slot: usize },
 }
@@ -109,11 +104,7 @@ impl Timeline2DState {
         if self.selected_features.len() < 2 {
             return false;
         }
-        let mut indices: Vec<usize> = self
-            .selected_features
-            .iter()
-            .filter_map(|id| timeline_order.iter().position(|f| f == id))
-            .collect();
+        let mut indices: Vec<usize> = self.selected_features.iter().filter_map(|id| timeline_order.iter().position(|f| f == id)).collect();
         indices.sort_unstable();
 
         for w in indices.windows(2) {
@@ -130,11 +121,7 @@ impl Timeline2DState {
         features: &[(usize, &str, &str)], // (step_1_based, name, component_name)
         is_active: bool,
     ) -> String {
-        let status = if is_active {
-            "Active (Evaluated as solid bodies)"
-        } else {
-            "Inactive (Rolled back, 100% opacity greyscale)"
-        };
+        let status = if is_active { "Active (Evaluated as solid bodies)" } else { "Inactive (Rolled back, 100% opacity greyscale)" };
 
         let count = features.len();
         let step_range = if count == 0 {
@@ -145,9 +132,7 @@ impl Timeline2DState {
             format!("Steps {:02} – {:02}", features[0].0, features[count - 1].0)
         };
 
-        let mut tip = format!(
-            "{group_name} ({count} Actions)\n{step_range} • {status}\n\nIncluded Features:\n"
-        );
+        let mut tip = format!("{group_name} ({count} Actions)\n{step_range} • {status}\n\nIncluded Features:\n");
 
         for (step, name, comp) in features {
             tip.push_str(&format!("  • [{step:02}] {name} ({comp})\n"));
@@ -157,4 +142,3 @@ impl Timeline2DState {
         tip
     }
 }
-

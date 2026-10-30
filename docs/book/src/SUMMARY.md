@@ -6,6 +6,7 @@
 
 - [Getting started](guide/getting-started.md)
 - [A tour of the window](guide/ui-tour.md)
+- [2D History Browser](guide/timeline-2d.md)
 - [Sketching and constraints](guide/sketching.md)
   - [Equation curves](guide/equation-curves.md)
 - [Solid features](guide/features.md)

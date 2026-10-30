@@ -1,15 +1,13 @@
 //! 2D Grid Canvas, Two-Tier Header, Pinned Component Tracks, and Marker Scrubber.
 
-use std::collections::{BTreeMap, BTreeSet};
-use egui::{
-    FontId, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2,
-};
-use solidcraft_engine::doc::{Document, Feature, FeatureKind, Model};
+use super::deps::DependencyGraph;
+use super::state::Timeline2DState;
 use crate::SolveApp;
 use crate::theme::Tokens;
 use crate::ui_kit::{HistoryTransport, Menu};
-use super::deps::DependencyGraph;
-use super::state::Timeline2DState;
+use egui::{FontId, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
+use solidcraft_engine::doc::{Document, Feature, FeatureKind, Model};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const HEADER_T1_HEIGHT: f32 = 24.0;
 pub const HEADER_T2_HEIGHT: f32 = 20.0;
@@ -26,16 +24,9 @@ pub const DOCK_TOTAL_HEIGHT: f32 = 186.0;
 #[derive(Clone, Debug)]
 pub enum VisualColumn {
     /// A single feature column (or multiple features in multi-component step).
-    Features {
-        step_number: usize,
-        features: Vec<u64>,
-        open_group: Option<u64>,
-    },
+    Features { step_number: usize, features: Vec<u64>, open_group: Option<u64> },
     /// A folded group column collapsing member features into a single virtual chip.
-    FoldedGroup {
-        group_id: u64,
-        features: Vec<u64>,
-    },
+    FoldedGroup { group_id: u64, features: Vec<u64> },
 }
 
 impl VisualColumn {
@@ -74,11 +65,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
 
     // Root component 0 always first
     component_ids.push(0);
-    let root_name = if app.session.doc.name.is_empty() {
-        "Root Component".to_string()
-    } else {
-        app.session.doc.name.clone()
-    };
+    let root_name = if app.session.doc.name.is_empty() { "Root Component".to_string() } else { app.session.doc.name.clone() };
     component_names.insert(0, root_name);
 
     for comp in &app.session.doc.components {
@@ -165,10 +152,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
     }
 
     // 6. Draw Orthogonal CAD Background Grid
-    let grid_rect = Rect::from_min_max(
-        pos2(grid_origin_x, total_rect.top() + HEADER_TOTAL_HEIGHT),
-        total_rect.right_bottom(),
-    );
+    let grid_rect = Rect::from_min_max(pos2(grid_origin_x, total_rect.top() + HEADER_TOTAL_HEIGHT), total_rect.right_bottom());
     let grid_painter = ui.painter().with_clip_rect(grid_rect);
     let grid_line_color = t.border.gamma_multiply(0.25);
 
@@ -230,10 +214,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
             VisualColumn::Features { features, open_group, .. } => {
                 // If open group, draw subtle corridor tint in Tier 2
                 if let Some(_grp_id) = open_group {
-                    let banner_rect = Rect::from_min_size(
-                        pos2(col_x, total_rect.top() + HEADER_T1_HEIGHT),
-                        vec2(COL_WIDTH, HEADER_T2_HEIGHT),
-                    );
+                    let banner_rect = Rect::from_min_size(pos2(col_x, total_rect.top() + HEADER_T1_HEIGHT), vec2(COL_WIDTH, HEADER_T2_HEIGHT));
                     let tint = t.accent.gamma_multiply(0.06);
                     painter.rect_filled(banner_rect, 0.0, tint);
                 }
@@ -248,10 +229,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                 for &fid in features {
                     if let Some(f) = app.session.doc.feature(fid) {
                         let affected = feature_components_map.get(&fid).cloned().unwrap_or_else(|| vec![f.component]);
-                        let mut tracks: Vec<usize> = affected
-                            .iter()
-                            .filter_map(|cid| component_ids.iter().position(|id| id == cid))
-                            .collect();
+                        let mut tracks: Vec<usize> = affected.iter().filter_map(|cid| component_ids.iter().position(|id| id == cid)).collect();
                         if tracks.is_empty() {
                             let default_track = component_ids.iter().position(|&cid| cid == f.component).unwrap_or(0);
                             tracks.push(default_track);
@@ -277,8 +255,10 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                 if all_track_indices.len() > 1
                     && let (Some(&min_track), Some(&max_track)) = (all_track_indices.first(), all_track_indices.last())
                 {
-                    let y1 = total_rect.top() + HEADER_TOTAL_HEIGHT + min_track as f32 * ROW_HEIGHT + ROW_HEIGHT / 2.0 - state.scroll_y + state.overscroll_y;
-                    let y2 = total_rect.top() + HEADER_TOTAL_HEIGHT + max_track as f32 * ROW_HEIGHT + ROW_HEIGHT / 2.0 - state.scroll_y + state.overscroll_y;
+                    let y1 = total_rect.top() + HEADER_TOTAL_HEIGHT + min_track as f32 * ROW_HEIGHT + ROW_HEIGHT / 2.0 - state.scroll_y
+                        + state.overscroll_y;
+                    let y2 = total_rect.top() + HEADER_TOTAL_HEIGHT + max_track as f32 * ROW_HEIGHT + ROW_HEIGHT / 2.0 - state.scroll_y
+                        + state.overscroll_y;
 
                     if y1 < y2 && y1 < grid_rect.bottom() && y2 > grid_rect.top() {
                         let cx = col_x + COL_WIDTH / 2.0;
@@ -295,7 +275,9 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                 // Paint individual chips
                 for (fid, track_idx) in column_chips {
                     if let Some(f) = app.session.doc.feature(fid) {
-                        let chip_top = total_rect.top() + HEADER_TOTAL_HEIGHT + track_idx as f32 * ROW_HEIGHT + (ROW_HEIGHT - CHIP_HEIGHT) / 2.0 - state.scroll_y + state.overscroll_y;
+                        let chip_top = total_rect.top() + HEADER_TOTAL_HEIGHT + track_idx as f32 * ROW_HEIGHT + (ROW_HEIGHT - CHIP_HEIGHT) / 2.0
+                            - state.scroll_y
+                            + state.overscroll_y;
                         let chip_rect = Rect::from_min_size(pos2(col_x + (COL_WIDTH - CHIP_WIDTH) / 2.0, chip_top), vec2(CHIP_WIDTH, CHIP_HEIGHT));
 
                         if chip_rect.bottom() < grid_rect.top() || chip_rect.top() > grid_rect.bottom() {
@@ -364,7 +346,12 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
 
                         if is_being_dragged {
                             grid_painter.rect_filled(chip_rect, egui::CornerRadius::same(t.radius_sm), t.timeline.gamma_multiply(0.35));
-                            grid_painter.rect_stroke(chip_rect, egui::CornerRadius::same(t.radius_sm), Stroke::new(1.0, t.border.gamma_multiply(0.4)), StrokeKind::Inside);
+                            grid_painter.rect_stroke(
+                                chip_rect,
+                                egui::CornerRadius::same(t.radius_sm),
+                                Stroke::new(1.0, t.border.gamma_multiply(0.4)),
+                                StrokeKind::Inside,
+                            );
                         } else {
                             // Paint action chip
                             paint_action_chip(
@@ -389,59 +376,66 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                             let sel_count = state.selected_features.len();
 
                             Menu::context(&resp, |ui| {
-                            if crate::context_menu::button(ui, crate::i18n::tr_label("Edit Feature"), "edit").clicked() {
-                                action_to_edit = Some(fid);
-                                ui.close();
-                            }
-                            if is_adjacent && sel_count >= 2 {
-                                let label = crate::i18n::format("ui.timeline_2d_group_selection", &[("count", &sel_count.to_string())]);
-                                if crate::context_menu::button(ui, &label, "folder").clicked() {
-                                    let ordered_selected: Vec<u64> = dep_graph.features.iter().copied().filter(|id| state.selected_features.contains(id)).collect();
-                                    let group_name = format!("Group {}", app.session.doc.timeline_groups.len() + 1);
-                                    let _ = app.run_heavy("timeline.group", serde_json::json!({
-                                        "name": group_name,
-                                        "features": ordered_selected,
-                                    }));
+                                if crate::context_menu::button(ui, crate::i18n::tr_label("Edit Feature"), "edit").clicked() {
+                                    action_to_edit = Some(fid);
                                     ui.close();
                                 }
-                            }
-                            if crate::context_menu::button(ui, crate::i18n::tr_label("Rename"), "rename").clicked() {
-                                app.dialog = Some(crate::dialogs::Dialog::rename(fid, &f_name));
-                                ui.close();
-                            }
-                            let suppress_key = if is_suppressed { "timeline.unsuppress_features" } else { "timeline.suppress_features" };
-                            let suppress_icon = if is_suppressed { "eye" } else { "suppress" };
-                            if crate::context_menu::button(ui, crate::i18n::tr(suppress_key), suppress_icon).clicked() {
-                                let base_targets = if state.selected_features.contains(&fid) {
-                                    state.selected_features.iter().copied().collect::<Vec<_>>()
-                                } else {
-                                    vec![fid]
+                                if is_adjacent && sel_count >= 2 {
+                                    let label = crate::i18n::format("ui.timeline_2d_group_selection", &[("count", &sel_count.to_string())]);
+                                    if crate::context_menu::button(ui, &label, "folder").clicked() {
+                                        let ordered_selected: Vec<u64> =
+                                            dep_graph.features.iter().copied().filter(|id| state.selected_features.contains(id)).collect();
+                                        let group_name = format!("Group {}", app.session.doc.timeline_groups.len() + 1);
+                                        let _ = app.run_heavy(
+                                            "timeline.group",
+                                            serde_json::json!({
+                                                "name": group_name,
+                                                "features": ordered_selected,
+                                            }),
+                                        );
+                                        ui.close();
+                                    }
+                                }
+                                if crate::context_menu::button(ui, crate::i18n::tr_label("Rename"), "rename").clicked() {
+                                    app.dialog = Some(crate::dialogs::Dialog::rename(fid, &f_name));
+                                    ui.close();
+                                }
+                                let suppress_key = if is_suppressed { "timeline.unsuppress_features" } else { "timeline.suppress_features" };
+                                let suppress_icon = if is_suppressed { "eye" } else { "suppress" };
+                                if crate::context_menu::button(ui, crate::i18n::tr(suppress_key), suppress_icon).clicked() {
+                                    let base_targets = if state.selected_features.contains(&fid) {
+                                        state.selected_features.iter().copied().collect::<Vec<_>>()
+                                    } else {
+                                        vec![fid]
+                                    };
+                                    let cascade_targets = if is_suppressed {
+                                        dep_graph.collect_unsuppression_cascade_for_set(&app.session.doc, &base_targets)
+                                    } else {
+                                        dep_graph.collect_suppression_cascade_for_set(&base_targets)
+                                    };
+                                    let _ = app.run_heavy(
+                                        "timeline.suppress",
+                                        serde_json::json!({
+                                            "features": cascade_targets,
+                                            "suppressed": !is_suppressed,
+                                        }),
+                                    );
+                                    ui.close();
+                                }
+                                if crate::context_menu::button(ui, crate::i18n::tr_label("Roll History Marker Here"), "rollback").clicked() {
+                                    let _ = app.run_heavy("timeline.roll_to", serde_json::json!({ "feature": fid }));
+                                    ui.close();
+                                }
+                                ui.separator();
+                                let delete_label = match targets.len() {
+                                    1 => crate::i18n::tr_label("Delete").to_string(),
+                                    n => crate::i18n::format("timeline.delete_many", &[("count", &n.to_string())]),
                                 };
-                                let cascade_targets = if is_suppressed {
-                                    dep_graph.collect_unsuppression_cascade_for_set(&app.session.doc, &base_targets)
-                                } else {
-                                    dep_graph.collect_suppression_cascade_for_set(&base_targets)
-                                };
-                                let _ = app.run_heavy("timeline.suppress", serde_json::json!({
-                                    "features": cascade_targets,
-                                    "suppressed": !is_suppressed,
-                                }));
-                                ui.close();
-                            }
-                            if crate::context_menu::button(ui, crate::i18n::tr_label("Roll History Marker Here"), "rollback").clicked() {
-                                let _ = app.run_heavy("timeline.roll_to", serde_json::json!({ "feature": fid }));
-                                ui.close();
-                            }
-                            ui.separator();
-                            let delete_label = match targets.len() {
-                                1 => crate::i18n::tr_label("Delete").to_string(),
-                                n => crate::i18n::format("timeline.delete_many", &[("count", &n.to_string())]),
-                            };
-                            if crate::context_menu::button(ui, &delete_label, "delete").clicked() {
-                                crate::timeline::delete_features(app, targets);
-                                ui.close();
-                            }
-                        });
+                                if crate::context_menu::button(ui, &delete_label, "delete").clicked() {
+                                    crate::timeline::delete_features(app, targets);
+                                    ui.close();
+                                }
+                            });
                         }
                     }
                 }
@@ -453,19 +447,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
     }
 
     // 9. Paint Two-Tier Header Track
-    paint_two_tier_header(
-        &painter,
-        ui,
-        app,
-        total_rect,
-        grid_origin_x,
-        state.scroll_x,
-        &visual_columns,
-        marker_visual_col,
-        accent,
-        &t,
-        &mut state,
-    );
+    paint_two_tier_header(&painter, ui, app, total_rect, grid_origin_x, state.scroll_x, &visual_columns, marker_visual_col, accent, &t, &mut state);
 
     // 9b. Paint Folded Group Virtual Chips (starts on Tier 2 of Header, spans component tracks)
     for (col_idx, col) in visual_columns.iter().enumerate() {
@@ -476,12 +458,12 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
 
         if let VisualColumn::FoldedGroup { group_id, features } = col {
             let card_top = total_rect.top() + HEADER_T1_HEIGHT + 2.0;
-            let card_bottom = ((total_rect.top() + HEADER_TOTAL_HEIGHT + component_ids.len().max(1) as f32 * ROW_HEIGHT - 6.0 - state.scroll_y + state.overscroll_y).min(total_rect.bottom() - 6.0)).max(card_top + HEADER_T2_HEIGHT + 24.0);
+            let card_bottom = ((total_rect.top() + HEADER_TOTAL_HEIGHT + component_ids.len().max(1) as f32 * ROW_HEIGHT - 6.0 - state.scroll_y
+                + state.overscroll_y)
+                .min(total_rect.bottom() - 6.0))
+            .max(card_top + HEADER_T2_HEIGHT + 24.0);
             let card_height = card_bottom - card_top;
-            let card_rect = Rect::from_min_size(
-                pos2(col_x + (COL_WIDTH - CHIP_WIDTH) / 2.0, card_top),
-                vec2(CHIP_WIDTH, card_height),
-            );
+            let card_rect = Rect::from_min_size(pos2(col_x + (COL_WIDTH - CHIP_WIDTH) / 2.0, card_top), vec2(CHIP_WIDTH, card_height));
 
             let is_active = col_idx < marker_visual_col;
             let is_group_selected = features.iter().any(|id| state.is_selected(*id));
@@ -500,13 +482,17 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
             let resp = ui.interact(card_rect, ui.id().with(("grp_card", *group_id)), Sense::click_and_drag());
             if resp.hovered() {
                 state.hovered_group = Some(*group_id);
-                if let Some(pos) = pointer_pos && header_cap_rect.contains(pos) {
+                if let Some(pos) = pointer_pos
+                    && header_cap_rect.contains(pos)
+                {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
             }
 
             if resp.clicked() {
-                if let Some(pos) = pointer_pos && header_cap_rect.contains(pos) {
+                if let Some(pos) = pointer_pos
+                    && header_cap_rect.contains(pos)
+                {
                     state.set_group_folded(*group_id, false);
                 } else {
                     state.selected_features.clear();
@@ -598,11 +584,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                     total_features
                 };
                 if target_slot != marker_slot {
-                    let params = if target_slot < total_features {
-                        serde_json::json!({ "position": target_slot })
-                    } else {
-                        serde_json::json!({})
-                    };
+                    let params = if target_slot < total_features { serde_json::json!({ "position": target_slot }) } else { serde_json::json!({}) };
                     let _ = app.run_heavy("timeline.roll_to", params);
                 }
             }
@@ -621,23 +603,12 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
     }
 
     // 12. Active Drag-and-Drop Processing for Feature Action Chips (Horizontal Reordering)
-    if let Some(super::state::DragTarget::Feature {
-        id: drag_fid,
-        start_col,
-        track_idx,
-        current_pos: last_pos,
-    }) = state.drag
-    {
+    if let Some(super::state::DragTarget::Feature { id: drag_fid, start_col, track_idx, current_pos: last_pos }) = state.drag {
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             state.drag = None;
         } else {
             let current_pos = pointer_pos.unwrap_or(last_pos);
-            state.drag = Some(super::state::DragTarget::Feature {
-                id: drag_fid,
-                start_col,
-                track_idx,
-                current_pos,
-            });
+            state.drag = Some(super::state::DragTarget::Feature { id: drag_fid, start_col, track_idx, current_pos });
 
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             ui.ctx().request_repaint();
@@ -658,31 +629,16 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
             let target_cell_rect = Rect::from_min_size(pos2(target_cell_x, target_cell_y), vec2(COL_WIDTH, ROW_HEIGHT));
 
             if target_cell_rect.intersects(grid_rect) {
-                let cell_tint = if is_valid_drop {
-                    t.form_success.gamma_multiply(0.12)
-                } else {
-                    t.error.gamma_multiply(0.12)
-                };
-                let cell_stroke = if is_valid_drop {
-                    Stroke::new(1.5, t.form_success)
-                } else {
-                    Stroke::new(1.5, t.error)
-                };
+                let cell_tint = if is_valid_drop { t.form_success.gamma_multiply(0.12) } else { t.error.gamma_multiply(0.12) };
+                let cell_stroke = if is_valid_drop { Stroke::new(1.5, t.form_success) } else { Stroke::new(1.5, t.error) };
                 grid_painter.rect_filled(target_cell_rect, 0.0, cell_tint);
                 grid_painter.rect_stroke(target_cell_rect, 0.0, cell_stroke, StrokeKind::Inside);
             }
 
             // B. Vertical insertion drop bar
             if target_visual_col != start_col && is_valid_drop {
-                let bar_x = if target_visual_col > start_col {
-                    target_cell_x + COL_WIDTH
-                } else {
-                    target_cell_x
-                };
-                let bar_rect = Rect::from_min_max(
-                    pos2(bar_x - 1.5, target_cell_y + 3.0),
-                    pos2(bar_x + 1.5, target_cell_y + ROW_HEIGHT - 3.0),
-                );
+                let bar_x = if target_visual_col > start_col { target_cell_x + COL_WIDTH } else { target_cell_x };
+                let bar_rect = Rect::from_min_max(pos2(bar_x - 1.5, target_cell_y + 3.0), pos2(bar_x + 1.5, target_cell_y + ROW_HEIGHT - 3.0));
                 grid_painter.rect_filled(bar_rect, 1.0, t.sketch_accent);
             }
 
@@ -718,11 +674,14 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                         && let Some(&to_slot) = dep_graph.id_to_index.get(&tfid)
                     {
                         let is_active = target_visual_col < marker_visual_col;
-                        let res = app.run_heavy("timeline.reorder", serde_json::json!({
-                            "feature": drag_fid,
-                            "position": to_slot,
-                            "active": is_active,
-                        }));
+                        let res = app.run_heavy(
+                            "timeline.reorder",
+                            serde_json::json!({
+                                "feature": drag_fid,
+                                "position": to_slot,
+                                "active": is_active,
+                            }),
+                        );
                         if res.is_ok() {
                             changed = true;
                         }
@@ -762,27 +721,16 @@ fn build_visual_columns(doc: &Document, folded_groups: &BTreeSet<u64>) -> Vec<Vi
                     grp_features.push(doc.features[i].id);
                     i += 1;
                 }
-                columns.push(VisualColumn::FoldedGroup {
-                    group_id: g.id,
-                    features: grp_features,
-                });
+                columns.push(VisualColumn::FoldedGroup { group_id: g.id, features: grp_features });
                 continue;
             } else {
-                columns.push(VisualColumn::Features {
-                    step_number: i + 1,
-                    features: vec![f.id],
-                    open_group: Some(g.id),
-                });
+                columns.push(VisualColumn::Features { step_number: i + 1, features: vec![f.id], open_group: Some(g.id) });
                 i += 1;
                 continue;
             }
         }
 
-        columns.push(VisualColumn::Features {
-            step_number: i + 1,
-            features: vec![f.id],
-            open_group: None,
-        });
+        columns.push(VisualColumn::Features { step_number: i + 1, features: vec![f.id], open_group: None });
         i += 1;
     }
     columns
@@ -802,10 +750,7 @@ fn paint_two_tier_header(
     t: &Tokens,
     state: &mut Timeline2DState,
 ) {
-    let header_rect = Rect::from_min_max(
-        pos2(grid_origin_x, total_rect.top()),
-        pos2(total_rect.right(), total_rect.top() + HEADER_TOTAL_HEIGHT),
-    );
+    let header_rect = Rect::from_min_max(pos2(grid_origin_x, total_rect.top()), pos2(total_rect.right(), total_rect.top() + HEADER_TOTAL_HEIGHT));
     let header_rounding = egui::CornerRadius { nw: 0, ne: t.radius_lg, sw: 0, se: 0 };
     p.rect_filled(header_rect, header_rounding, t.timeline);
 
@@ -830,10 +775,7 @@ fn paint_two_tier_header(
 
         // Notch indicator
         let notch_x = col_x + COL_WIDTH / 2.0;
-        p.line_segment(
-            [pos2(notch_x, total_rect.top() + 3.0), pos2(notch_x, total_rect.top() + 7.0)],
-            Stroke::new(1.0, t.border),
-        );
+        p.line_segment([pos2(notch_x, total_rect.top() + 3.0), pos2(notch_x, total_rect.top() + 7.0)], Stroke::new(1.0, t.border));
 
         match col {
             VisualColumn::Features { step_number, .. } => {
@@ -891,22 +833,9 @@ fn paint_two_tier_header(
                 if resp.clicked() {
                     state.set_group_folded(grp_id, true);
                 }
-                let grp_name = app
-                    .session
-                    .doc
-                    .timeline_groups
-                    .iter()
-                    .find(|g| g.id == grp_id)
-                    .map(|g| g.name.clone())
-                    .unwrap_or_else(|| "Group".to_string());
-                let g_feats = app
-                    .session
-                    .doc
-                    .timeline_groups
-                    .iter()
-                    .find(|g| g.id == grp_id)
-                    .map(|g| g.features.clone())
-                    .unwrap_or_default();
+                let grp_name =
+                    app.session.doc.timeline_groups.iter().find(|g| g.id == grp_id).map(|g| g.name.clone()).unwrap_or_else(|| "Group".to_string());
+                let g_feats = app.session.doc.timeline_groups.iter().find(|g| g.id == grp_id).map(|g| g.features.clone()).unwrap_or_default();
 
                 let resp = resp.on_hover_text(format!("Click to fold {}", grp_name));
 
@@ -982,27 +911,15 @@ fn paint_pinned_left(
     t: &Tokens,
 ) {
     let pinned_rect = Rect::from_min_max(total_rect.left_top(), pos2(total_rect.left() + PINNED_LEFT_WIDTH, total_rect.bottom()));
-    let pinned_rounding = egui::CornerRadius {
-        nw: t.radius_lg,
-        ne: 0,
-        sw: if floating { t.radius_lg } else { 0 },
-        se: 0,
-    };
+    let pinned_rounding = egui::CornerRadius { nw: t.radius_lg, ne: 0, sw: if floating { t.radius_lg } else { 0 }, se: 0 };
     p.rect_filled(pinned_rect, pinned_rounding, t.panel);
 
     // Vertical seam divider
-    p.line_segment(
-        [pos2(pinned_rect.right(), total_rect.top()), pos2(pinned_rect.right(), total_rect.bottom())],
-        Stroke::new(1.0, t.border),
-    );
+    p.line_segment([pos2(pinned_rect.right(), total_rect.top()), pos2(pinned_rect.right(), total_rect.bottom())], Stroke::new(1.0, t.border));
 
     // Leading Transport Header (top 44px)
     let transport_header_rect = Rect::from_min_size(pinned_rect.left_top(), vec2(PINNED_LEFT_WIDTH, HEADER_TOTAL_HEIGHT));
-    p.rect_filled(
-        transport_header_rect,
-        egui::CornerRadius { nw: t.radius_lg, ne: 0, sw: 0, se: 0 },
-        t.timeline,
-    );
+    p.rect_filled(transport_header_rect, egui::CornerRadius { nw: t.radius_lg, ne: 0, sw: 0, se: 0 }, t.timeline);
 
     // Transport buttons centered and scaled across the header
     let controls = HistoryTransport::shown(app.preferences.history_play_button);
@@ -1037,23 +954,15 @@ fn paint_pinned_left(
         row_p.line_segment([row_rect.left_bottom(), row_rect.right_bottom()], Stroke::new(1.0, t.border.gamma_multiply(0.25)));
 
         // Color badge
-        let color = component_colors
-            .get(&cid)
-            .and_then(|c| c.map(|[r, g, b]| egui::Rgba::from_srgba_unmultiplied(r, g, b, 255).into()))
-            .unwrap_or(t.accent);
+        let color =
+            component_colors.get(&cid).and_then(|c| c.map(|[r, g, b]| egui::Rgba::from_srgba_unmultiplied(r, g, b, 255).into())).unwrap_or(t.accent);
 
         let dot_pos = pos2(row_rect.left() + 14.0, row_rect.center().y);
         row_p.circle_filled(dot_pos, 4.0, color);
 
         // Component name
         let name = component_names.get(&cid).map(|s| s.as_str()).unwrap_or("Component");
-        row_p.text(
-            pos2(row_rect.left() + 24.0, row_rect.center().y),
-            egui::Align2::LEFT_CENTER,
-            name,
-            FontId::proportional(11.0),
-            t.text,
-        );
+        row_p.text(pos2(row_rect.left() + 24.0, row_rect.center().y), egui::Align2::LEFT_CENTER, name, FontId::proportional(11.0), t.text);
     }
 }
 
@@ -1121,42 +1030,18 @@ fn paint_action_chip(
 }
 
 /// Helper: paints the virtual group chip spanning component tracks.
-fn paint_virtual_group_chip(
-    p: &egui::Painter,
-    rect: Rect,
-    group_name: &str,
-    count: usize,
-    is_active: bool,
-    is_selected: bool,
-    t: &Tokens,
-) {
-    let border_color = if is_selected {
-        if is_active { t.text } else { t.text_dim }
-    } else {
-        if is_active { t.accent } else { t.border }
-    };
+fn paint_virtual_group_chip(p: &egui::Painter, rect: Rect, group_name: &str, count: usize, is_active: bool, is_selected: bool, t: &Tokens) {
+    let border_color = if is_selected { if is_active { t.text } else { t.text_dim } } else { if is_active { t.accent } else { t.border } };
 
-    let bg_color = if is_active {
-        t.timeline_item
-    } else {
-        t.panel
-    };
+    let bg_color = if is_active { t.timeline_item } else { t.panel };
 
     p.rect_filled(rect, 5.0, bg_color);
     p.rect_stroke(rect, 5.0, Stroke::new(if is_selected { 1.5 } else { 1.0 }, border_color), StrokeKind::Inside);
 
     // Integrated header cap (folder icon + expansion chevron indicator)
     let header_cap_rect = Rect::from_min_size(rect.left_top(), vec2(rect.width(), HEADER_T2_HEIGHT - 2.0));
-    let cap_bg = if is_active {
-        t.accent.gamma_multiply(0.25)
-    } else {
-        t.text_dim.gamma_multiply(0.2)
-    };
-    let cap_stroke = if is_active {
-        t.accent.gamma_multiply(0.5)
-    } else {
-        t.border
-    };
+    let cap_bg = if is_active { t.accent.gamma_multiply(0.25) } else { t.text_dim.gamma_multiply(0.2) };
+    let cap_stroke = if is_active { t.accent.gamma_multiply(0.5) } else { t.border };
     let cap_rounding = egui::CornerRadius { nw: 4, ne: 4, sw: 2, se: 2 };
     p.rect_filled(header_cap_rect, cap_rounding, cap_bg);
     p.rect_stroke(header_cap_rect, cap_rounding, Stroke::new(1.0, cap_stroke), StrokeKind::Inside);
@@ -1181,22 +1066,13 @@ fn paint_virtual_group_chip(
     // Count badge
     let badge_rect = Rect::from_center_size(pos2(rect.center().x, rect.top() + HEADER_T2_HEIGHT + 14.0), vec2(18.0, 14.0));
     p.rect_filled(badge_rect, 3.0, if is_active { t.accent.gamma_multiply(0.2) } else { t.text_dim.gamma_multiply(0.15) });
-    p.text(
-        badge_rect.center(),
-        egui::Align2::CENTER_CENTER,
-        count.to_string(),
-        FontId::monospace(9.0),
-        if is_active { t.accent } else { t.text },
-    );
+    p.text(badge_rect.center(), egui::Align2::CENTER_CENTER, count.to_string(), FontId::monospace(9.0), if is_active { t.accent } else { t.text });
 
     // Vertical 90-degree rotated title text
     let title_pos = pos2(rect.center().x, rect.top() + HEADER_T2_HEIGHT + 30.0);
     let title_color = if is_active { t.text } else { t.text_dim };
-    let mut shape = egui::epaint::TextShape::new(
-        title_pos,
-        p.layout_no_wrap(group_name.to_string(), FontId::proportional(11.0), title_color),
-        title_color,
-    );
+    let mut shape =
+        egui::epaint::TextShape::new(title_pos, p.layout_no_wrap(group_name.to_string(), FontId::proportional(11.0), title_color), title_color);
     shape.angle = std::f32::consts::FRAC_PI_2;
     p.add(shape);
 }
@@ -1213,24 +1089,14 @@ fn feature_to_visual_col(columns: &[VisualColumn], fid: u64) -> Option<usize> {
 
 /// Helper: computes the visual corridor `(min_col, max_col)` in visual column indices
 /// for the currently selected feature(s), taking into account folded groups.
-fn compute_visual_corridor(
-    columns: &[VisualColumn],
-    dep_graph: &DependencyGraph,
-    selected_features: &BTreeSet<u64>,
-) -> Option<(usize, usize)> {
+fn compute_visual_corridor(columns: &[VisualColumn], dep_graph: &DependencyGraph, selected_features: &BTreeSet<u64>) -> Option<(usize, usize)> {
     if selected_features.is_empty() {
         return None;
     }
 
     let selected_vec: Vec<u64> = selected_features.iter().copied().collect();
-    let min_curr = selected_vec
-        .iter()
-        .filter_map(|&id| feature_to_visual_col(columns, id))
-        .min()?;
-    let max_curr = selected_vec
-        .iter()
-        .filter_map(|&id| feature_to_visual_col(columns, id))
-        .max()?;
+    let min_curr = selected_vec.iter().filter_map(|&id| feature_to_visual_col(columns, id)).min()?;
+    let max_curr = selected_vec.iter().filter_map(|&id| feature_to_visual_col(columns, id)).max()?;
 
     let max_prereq_col = selected_vec
         .iter()
@@ -1249,10 +1115,7 @@ fn compute_visual_corridor(
         .min();
 
     let min_col = max_prereq_col.map(|c| c + 1).unwrap_or(0).min(min_curr);
-    let max_col = min_dependent_col
-        .map(|c| c.saturating_sub(1))
-        .unwrap_or(columns.len().saturating_sub(1))
-        .max(max_curr);
+    let max_col = min_dependent_col.map(|c| c.saturating_sub(1)).unwrap_or(columns.len().saturating_sub(1)).max(max_curr);
 
     Some((min_col, max_col))
 }
@@ -1315,44 +1178,22 @@ fn paint_movable_corridor(
     }
 }
 
-fn paint_bracket_open(
-    p: &egui::Painter,
-    x: f32,
-    grid_origin_x: f32,
-    top: f32,
-    bottom: f32,
-    color: egui::Color32,
-    marker_x: Option<f32>,
-) {
+fn paint_bracket_open(p: &egui::Painter, x: f32, grid_origin_x: f32, top: f32, bottom: f32, color: egui::Color32, marker_x: Option<f32>) {
     let stroke = Stroke::new(2.0, color);
 
     // Inset from the pinned component layer's border seam if at the boundary
-    let (bx, tick_len) = if (x - grid_origin_x).abs() <= 1.0 {
-        (grid_origin_x + 1.5, 6.0)
-    } else {
-        (x, 7.0)
-    };
+    let (bx, tick_len) = if (x - grid_origin_x).abs() <= 1.0 { (grid_origin_x + 1.5, 6.0) } else { (x, 7.0) };
 
     let covered_by_marker = marker_x.is_some_and(|mx| (bx - mx).abs() <= 1.5);
 
     p.line_segment([pos2(bx + tick_len, top), pos2(bx, top)], stroke);
     if !covered_by_marker {
-        p.line_segment(
-            [pos2(bx, top - stroke.width / 2.0), pos2(bx, bottom + stroke.width / 2.0)],
-            stroke,
-        );
+        p.line_segment([pos2(bx, top - stroke.width / 2.0), pos2(bx, bottom + stroke.width / 2.0)], stroke);
     }
     p.line_segment([pos2(bx, bottom), pos2(bx + tick_len, bottom)], stroke);
 }
 
-fn paint_bracket_close(
-    p: &egui::Painter,
-    x: f32,
-    top: f32,
-    bottom: f32,
-    color: egui::Color32,
-    marker_x: Option<f32>,
-) {
+fn paint_bracket_close(p: &egui::Painter, x: f32, top: f32, bottom: f32, color: egui::Color32, marker_x: Option<f32>) {
     let stroke = Stroke::new(2.0, color);
     let tick_len = 7.0;
 
@@ -1360,10 +1201,7 @@ fn paint_bracket_close(
 
     p.line_segment([pos2(x - tick_len, top), pos2(x, top)], stroke);
     if !covered_by_marker {
-        p.line_segment(
-            [pos2(x, top - stroke.width / 2.0), pos2(x, bottom + stroke.width / 2.0)],
-            stroke,
-        );
+        p.line_segment([pos2(x, top - stroke.width / 2.0), pos2(x, bottom + stroke.width / 2.0)], stroke);
     }
     p.line_segment([pos2(x, bottom), pos2(x - tick_len, bottom)], stroke);
 }
@@ -1378,11 +1216,7 @@ fn paint_dotted_vertical_line(p: &egui::Painter, x: f32, y_start: f32, y_end: f3
 }
 
 /// Returns the sorted, deduplicated list of component IDs affected by a feature.
-pub fn feature_affected_components(
-    doc: &Document,
-    model: Option<&Model>,
-    f: &Feature,
-) -> Vec<u64> {
+pub fn feature_affected_components(doc: &Document, model: Option<&Model>, f: &Feature) -> Vec<u64> {
     let mut comps = BTreeSet::new();
     comps.insert(f.component);
 
@@ -1484,8 +1318,7 @@ pub fn feature_affected_components(
                 }
             }
         }
-        FeatureKind::Fillet { body, edges, .. }
-        | FeatureKind::Chamfer { body, edges, .. } => {
+        FeatureKind::Fillet { body, edges, .. } | FeatureKind::Chamfer { body, edges, .. } => {
             if let Some(b) = body
                 && let Some(cid) = resolve_body(b.as_ref())
             {
@@ -1495,9 +1328,7 @@ pub fn feature_affected_components(
                 for p in edges {
                     for b in bodies {
                         let mesh = b.mesh();
-                        let is_near = mesh.edges.iter().any(|e| {
-                            e.windows(2).any(|w| p.0.dist_to_segment(w[0], w[1]) < 0.05)
-                        });
+                        let is_near = mesh.edges.iter().any(|e| e.windows(2).any(|w| p.0.dist_to_segment(w[0], w[1]) < 0.05));
                         if is_near {
                             comps.insert(doc.model_body_component(b));
                         }

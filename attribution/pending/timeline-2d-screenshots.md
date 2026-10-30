@@ -1,0 +1,7 @@
+| File | Author | Source | Licence |
+| docs/book/src/generated/timeline-2d-corridor-selection.png | SolidCraft contributors | copy of docs/screenshots/timeline-2d-corridor-selection.png made by `cargo xtask book` (gitignored) | MIT OR Apache-2.0 |
+| docs/book/src/generated/timeline-2d-dock-closeup.png | SolidCraft contributors | copy of docs/screenshots/timeline-2d-dock-closeup.png made by `cargo xtask book` (gitignored) | MIT OR Apache-2.0 |
+| docs/book/src/generated/timeline-2d-overview.png | SolidCraft contributors | copy of docs/screenshots/timeline-2d-overview.png made by `cargo xtask book` (gitignored) | MIT OR Apache-2.0 |
+| docs/screenshots/timeline-2d-corridor-selection.png | SolidCraft contributors | screenshot of SolidCraft itself: 2D History Browser showing multi-track component layout, multi-component combine connector, active selection, orange prerequisites, green movable corridor brackets, and suppressed actions with 50% opacity slashed eye overlay | MIT OR Apache-2.0 |
+| docs/screenshots/timeline-2d-dock-closeup.png | SolidCraft contributors | screenshot of SolidCraft itself: closeup of the 2D History Browser dock showing pinned headers, transport controls, two-tier header scrubber, folded group, and suppressed action chips | MIT OR Apache-2.0 |
+| docs/screenshots/timeline-2d-overview.png | SolidCraft contributors | screenshot of SolidCraft itself: full application window with 3D model and 2D History Browser multi-track component layout, folded group cap, and cascading suppression | MIT OR Apache-2.0 |

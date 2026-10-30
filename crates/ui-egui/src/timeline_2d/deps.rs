@@ -4,9 +4,9 @@
 //! computing the valid drag-and-drop corridor `[min_slot, max_slot]` within which any feature
 //! or contiguous selection set can be reordered without violating topological constraints.
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use solidcraft_engine::doc::construct::{AxisDef, GeoRef, PointDef};
 use solidcraft_engine::doc::{Document, Feature, FeatureKind, PlaneRef};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 /// Valid topological insertion bounds for moving a feature or selection set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,15 +29,9 @@ impl MovableCorridor {
     /// and inactive (>= marker) intervals.
     pub fn split_at_marker(&self, marker: usize) -> CorridorSplit {
         if self.max_slot < marker {
-            CorridorSplit::AllActive {
-                min: self.min_slot,
-                max: self.max_slot,
-            }
+            CorridorSplit::AllActive { min: self.min_slot, max: self.max_slot }
         } else if self.min_slot >= marker {
-            CorridorSplit::AllInactive {
-                min: self.min_slot,
-                max: self.max_slot,
-            }
+            CorridorSplit::AllInactive { min: self.min_slot, max: self.max_slot }
         } else {
             CorridorSplit::Spanning {
                 active_min: self.min_slot,
@@ -57,12 +51,7 @@ pub enum CorridorSplit {
     /// Entire corridor sits to the right of the marker (rendered in greyscale).
     AllInactive { min: usize, max: usize },
     /// Corridor spans across the marker: active part green, inactive part greyscale.
-    Spanning {
-        active_min: usize,
-        active_max: usize,
-        inactive_min: usize,
-        inactive_max: usize,
-    },
+    Spanning { active_min: usize, active_max: usize, inactive_min: usize, inactive_max: usize },
 }
 
 /// A directed acyclic graph (DAG) representing topological dependencies between features.
@@ -113,14 +102,16 @@ impl DependencyGraph {
             // 2. Persistent face and edge references (e.g. F<id>:face)
             for name in &f.face_names {
                 if let Some(creator) = solidcraft_engine::doc::persistent_name::made_by(name)
-                    && creator != f.id && id_to_index.contains_key(&creator)
+                    && creator != f.id
+                    && id_to_index.contains_key(&creator)
                 {
                     prereqs.insert(creator);
                 }
             }
             for name in &f.edge_names {
                 if let Some(creator) = solidcraft_engine::doc::persistent_name::made_by(name)
-                    && creator != f.id && id_to_index.contains_key(&creator)
+                    && creator != f.id
+                    && id_to_index.contains_key(&creator)
                 {
                     prereqs.insert(creator);
                 }
@@ -171,13 +162,15 @@ impl DependencyGraph {
                     for link in &sketch.links {
                         if let Some(face) = &link.face_name
                             && let Some(creator) = solidcraft_engine::doc::persistent_name::made_by(face)
-                            && creator != f.id && id_to_index.contains_key(&creator)
+                            && creator != f.id
+                            && id_to_index.contains_key(&creator)
                         {
                             prereqs.insert(creator);
                         }
                         if let Some(edge) = &link.edge_name
                             && let Some(creator) = solidcraft_engine::doc::persistent_name::made_by(edge)
-                            && creator != f.id && id_to_index.contains_key(&creator)
+                            && creator != f.id
+                            && id_to_index.contains_key(&creator)
                         {
                             prereqs.insert(creator);
                         }
@@ -192,7 +185,8 @@ impl DependencyGraph {
                     }
                     collect_plane_prereqs(plane, &mut prereqs, &name_to_id, &body_producers);
                     if let Some(sk) = sketch
-                        && sk.0 != f.id && id_to_index.contains_key(&sk.0)
+                        && sk.0 != f.id
+                        && id_to_index.contains_key(&sk.0)
                     {
                         prereqs.insert(sk.0);
                     }
@@ -200,7 +194,8 @@ impl DependencyGraph {
                 FeatureKind::SplitFace { plane, sketch, .. } => {
                     collect_plane_prereqs(plane, &mut prereqs, &name_to_id, &body_producers);
                     if let Some(sk) = sketch
-                        && sk.0 != f.id && id_to_index.contains_key(&sk.0)
+                        && sk.0 != f.id
+                        && id_to_index.contains_key(&sk.0)
                     {
                         prereqs.insert(sk.0);
                     }
@@ -288,14 +283,7 @@ impl DependencyGraph {
             all_prereqs.insert(id, ancestors);
         }
 
-        Self {
-            features,
-            id_to_index,
-            direct_prereqs,
-            direct_dependents,
-            all_prereqs,
-            all_dependents,
-        }
+        Self { features, id_to_index, direct_prereqs, direct_dependents, all_prereqs, all_dependents }
     }
 
     /// Computes the valid movable corridor `[min_slot, max_slot]` for a single feature.
@@ -303,30 +291,14 @@ impl DependencyGraph {
         let &curr_slot = self.id_to_index.get(&id)?;
         let total = self.features.len();
 
-        let p_max = self
-            .all_prereqs
-            .get(&id)
-            .into_iter()
-            .flatten()
-            .filter_map(|&p| self.id_to_index.get(&p).copied())
-            .max();
+        let p_max = self.all_prereqs.get(&id).into_iter().flatten().filter_map(|&p| self.id_to_index.get(&p).copied()).max();
 
-        let d_min = self
-            .all_dependents
-            .get(&id)
-            .into_iter()
-            .flatten()
-            .filter_map(|&d| self.id_to_index.get(&d).copied())
-            .min();
+        let d_min = self.all_dependents.get(&id).into_iter().flatten().filter_map(|&d| self.id_to_index.get(&d).copied()).min();
 
         let min_slot = p_max.map(|p| p.saturating_add(1)).unwrap_or(0);
         let max_slot = d_min.map(|d| d.saturating_sub(1)).unwrap_or(total.saturating_sub(1));
 
-        Some(MovableCorridor {
-            min_slot: min_slot.min(curr_slot),
-            max_slot: max_slot.max(curr_slot),
-            current_slot: curr_slot,
-        })
+        Some(MovableCorridor { min_slot: min_slot.min(curr_slot), max_slot: max_slot.max(curr_slot), current_slot: curr_slot })
     }
 
     /// Computes the valid movable corridor `[min_slot, max_slot]` for a contiguous selection set.
@@ -365,25 +337,17 @@ impl DependencyGraph {
         let min_slot = p_max.map(|p| p.saturating_add(1)).unwrap_or(0);
         let max_slot = d_min.map(|d| d.saturating_sub(1)).unwrap_or(total.saturating_sub(1));
 
-        Some(MovableCorridor {
-            min_slot: min_slot.min(min_curr),
-            max_slot: max_slot.max(max_curr),
-            current_slot: min_curr,
-        })
+        Some(MovableCorridor { min_slot: min_slot.min(min_curr), max_slot: max_slot.max(max_curr), current_slot: min_curr })
     }
 
     /// Returns true if `other_id` is a prerequisite (ancestor) of `selected_id`.
     pub fn is_prerequisite(&self, selected_id: u64, other_id: u64) -> bool {
-        self.all_prereqs
-            .get(&selected_id)
-            .is_some_and(|set| set.contains(&other_id))
+        self.all_prereqs.get(&selected_id).is_some_and(|set| set.contains(&other_id))
     }
 
     /// Returns true if `other_id` is a downstream dependent (descendant) of `selected_id`.
     pub fn is_dependent(&self, selected_id: u64, other_id: u64) -> bool {
-        self.all_dependents
-            .get(&selected_id)
-            .is_some_and(|set| set.contains(&other_id))
+        self.all_dependents.get(&selected_id).is_some_and(|set| set.contains(&other_id))
     }
 
     /// Returns all prerequisite (ancestor) feature IDs of `id`.
@@ -503,12 +467,7 @@ fn creates_body(f: &Feature) -> bool {
 }
 
 /// Recursively collects prerequisites from a `PlaneRef`.
-fn collect_plane_prereqs(
-    plane: &PlaneRef,
-    prereqs: &mut BTreeSet<u64>,
-    name_to_id: &HashMap<&str, u64>,
-    body_producers: &HashMap<String, u64>,
-) {
+fn collect_plane_prereqs(plane: &PlaneRef, prereqs: &mut BTreeSet<u64>, name_to_id: &HashMap<&str, u64>, body_producers: &HashMap<String, u64>) {
     match plane {
         PlaneRef::Construction { feature } => {
             prereqs.insert(feature.0);
@@ -526,9 +485,7 @@ fn collect_plane_prereqs(
                 collect_geo_prereqs(geo, prereqs, name_to_id, body_producers);
             }
         }
-        PlaneRef::Midplane { a, b }
-        | PlaneRef::TwoEdges { a, b }
-        | PlaneRef::Perpendicular { plane: a, line: b } => {
+        PlaneRef::Midplane { a, b } | PlaneRef::TwoEdges { a, b } | PlaneRef::Perpendicular { plane: a, line: b } => {
             collect_geo_prereqs(a, prereqs, name_to_id, body_producers);
             collect_geo_prereqs(b, prereqs, name_to_id, body_producers);
         }
@@ -545,12 +502,7 @@ fn collect_plane_prereqs(
 }
 
 /// Collects prerequisites from a `GeoRef`.
-fn collect_geo_prereqs(
-    geo: &GeoRef,
-    prereqs: &mut BTreeSet<u64>,
-    name_to_id: &HashMap<&str, u64>,
-    body_producers: &HashMap<String, u64>,
-) {
+fn collect_geo_prereqs(geo: &GeoRef, prereqs: &mut BTreeSet<u64>, name_to_id: &HashMap<&str, u64>, body_producers: &HashMap<String, u64>) {
     match geo {
         GeoRef::SketchPoint { sketch, .. } | GeoRef::SketchCurve { sketch, .. } => {
             prereqs.insert(*sketch);
@@ -580,12 +532,7 @@ fn collect_geo_prereqs(
 }
 
 /// Collects prerequisites from an `AxisDef`.
-fn collect_axis_prereqs(
-    def: &AxisDef,
-    prereqs: &mut BTreeSet<u64>,
-    name_to_id: &HashMap<&str, u64>,
-    body_producers: &HashMap<String, u64>,
-) {
+fn collect_axis_prereqs(def: &AxisDef, prereqs: &mut BTreeSet<u64>, name_to_id: &HashMap<&str, u64>, body_producers: &HashMap<String, u64>) {
     match def {
         AxisDef::ThroughFace { face } | AxisDef::Edge { edge: face } => {
             collect_geo_prereqs(face, prereqs, name_to_id, body_producers);
@@ -602,12 +549,7 @@ fn collect_axis_prereqs(
 }
 
 /// Collects prerequisites from a `PointDef`.
-fn collect_point_prereqs(
-    def: &PointDef,
-    prereqs: &mut BTreeSet<u64>,
-    name_to_id: &HashMap<&str, u64>,
-    body_producers: &HashMap<String, u64>,
-) {
+fn collect_point_prereqs(def: &PointDef, prereqs: &mut BTreeSet<u64>, name_to_id: &HashMap<&str, u64>, body_producers: &HashMap<String, u64>) {
     match def {
         PointDef::At { point } | PointDef::Center { of: point } | PointDef::AlongPath { path: point, .. } => {
             collect_geo_prereqs(point, prereqs, name_to_id, body_producers);
@@ -633,9 +575,7 @@ fn collect_link_source_prereqs(
 ) {
     use solidcraft_engine::sketch::LinkSource;
     match src {
-        LinkSource::SketchCurve { sketch, .. }
-        | LinkSource::SketchPoint { sketch, .. }
-        | LinkSource::OnSurface { sketch, .. } => {
+        LinkSource::SketchCurve { sketch, .. } | LinkSource::SketchPoint { sketch, .. } | LinkSource::OnSurface { sketch, .. } => {
             prereqs.insert(*sketch);
         }
         LinkSource::Plane { name } => {
@@ -667,11 +607,7 @@ mod tests {
 
     #[test]
     fn test_corridor_is_valid_target() {
-        let corridor = MovableCorridor {
-            min_slot: 2,
-            max_slot: 5,
-            current_slot: 3,
-        };
+        let corridor = MovableCorridor { min_slot: 2, max_slot: 5, current_slot: 3 };
         assert!(!corridor.is_valid_target(1));
         assert!(corridor.is_valid_target(2));
         assert!(corridor.is_valid_target(3));
@@ -681,54 +617,30 @@ mod tests {
 
     #[test]
     fn test_corridor_split_at_marker() {
-        let corridor = MovableCorridor {
-            min_slot: 2,
-            max_slot: 7,
-            current_slot: 4,
-        };
+        let corridor = MovableCorridor { min_slot: 2, max_slot: 7, current_slot: 4 };
 
         // Marker after corridor: all active
-        assert_eq!(
-            corridor.split_at_marker(8),
-            CorridorSplit::AllActive { min: 2, max: 7 }
-        );
+        assert_eq!(corridor.split_at_marker(8), CorridorSplit::AllActive { min: 2, max: 7 });
 
         // Marker before corridor: all inactive
-        assert_eq!(
-            corridor.split_at_marker(2),
-            CorridorSplit::AllInactive { min: 2, max: 7 }
-        );
+        assert_eq!(corridor.split_at_marker(2), CorridorSplit::AllInactive { min: 2, max: 7 });
 
         // Marker inside corridor: spanning
-        assert_eq!(
-            corridor.split_at_marker(5),
-            CorridorSplit::Spanning {
-                active_min: 2,
-                active_max: 4,
-                inactive_min: 5,
-                inactive_max: 7,
-            }
-        );
+        assert_eq!(corridor.split_at_marker(5), CorridorSplit::Spanning { active_min: 2, active_max: 4, inactive_min: 5, inactive_max: 7 });
     }
 
     #[test]
     fn test_ripple_shifts_moving_right() {
         // Moving index 1 to index 4 in a 6-item list
         let shifts = DependencyGraph::ripple_shifts(1, 4, 6);
-        assert_eq!(
-            shifts,
-            vec![(2, 1), (3, 2), (4, 3), (1, 4)]
-        );
+        assert_eq!(shifts, vec![(2, 1), (3, 2), (4, 3), (1, 4)]);
     }
 
     #[test]
     fn test_ripple_shifts_moving_left() {
         // Moving index 4 to index 1 in a 6-item list
         let shifts = DependencyGraph::ripple_shifts(4, 1, 6);
-        assert_eq!(
-            shifts,
-            vec![(1, 2), (2, 3), (3, 4), (4, 1)]
-        );
+        assert_eq!(shifts, vec![(1, 2), (2, 3), (3, 4), (4, 1)]);
     }
 
     #[test]
@@ -787,4 +699,3 @@ mod tests {
         assert!(!graph.is_dependent(103, 102));
     }
 }
-

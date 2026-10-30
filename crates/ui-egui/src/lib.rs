@@ -2776,13 +2776,8 @@ impl SolveApp {
                 // A dialog in the left column holds the History's place.
                 (!dialog_column::holds(self)).then(|| timeline_left::floating_rect(self, below_ribbon))
             } else {
-                show_timeline.then(|| {
-                    if self.preferences.timeline_2d {
-                        timeline_2d::floating_rect(ui.ctx(), full)
-                    } else {
-                        timeline::floating_rect(full)
-                    }
-                })
+                show_timeline
+                    .then(|| if self.preferences.timeline_2d { timeline_2d::floating_rect(ui.ctx(), full) } else { timeline::floating_rect(full) })
             };
             // Draw the scene first, then let the unchanged panel layouts cover it. The
             // viewport keeps its full projection even underneath the browser and cards.

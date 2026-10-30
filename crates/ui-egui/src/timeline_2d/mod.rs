@@ -7,10 +7,10 @@ pub mod canvas;
 pub mod deps;
 pub mod state;
 
-use egui::{Rect, Ui, UiBuilder, pos2};
 use crate::SolveApp;
 use crate::theme::Tokens;
 use crate::ui_kit::{Container, Edge, Surface};
+use egui::{Rect, Ui, UiBuilder, pos2};
 
 /// Computes the floating card rectangle with a custom height.
 pub fn floating_rect_with_height(available: Rect, height: f32) -> Rect {
@@ -39,15 +39,8 @@ pub fn timeline(app: &mut SolveApp, ui: &mut Ui) {
     let remembered_h: f32 = ui.ctx().data_mut(|d| d.get_persisted::<f32>(height_id)).unwrap_or(canvas::DOCK_TOTAL_HEIGHT);
     let current_h = remembered_h.clamp(min_h, max_h);
 
-    let rounding = egui::CornerRadius {
-        nw: t.radius_lg,
-        ne: t.radius_lg,
-        sw: 0,
-        se: 0,
-    };
-    let frame = Container::new(ui.ctx(), Surface::Panel)
-        .edge_frame(t.timeline)
-        .corner_radius(rounding);
+    let rounding = egui::CornerRadius { nw: t.radius_lg, ne: t.radius_lg, sw: 0, se: 0 };
+    let frame = Container::new(ui.ctx(), Surface::Panel).edge_frame(t.timeline).corner_radius(rounding);
 
     let is_floating = Container::for_layout(app.ui.layout, Surface::Panel).floating();
     let view_rect = if is_floating {
@@ -64,13 +57,9 @@ pub fn timeline(app: &mut SolveApp, ui: &mut Ui) {
         canvas::paint_timeline_2d(app, &mut child, true);
         rect
     } else {
-        let response = Container::new(ui.ctx(), Surface::Panel)
-            .edge("sc_timeline", Edge::Bottom)
-            .exact_size(current_h)
-            .frame(frame)
-            .show(ui, |ui| {
-                canvas::paint_timeline_2d(app, ui, false);
-            });
+        let response = Container::new(ui.ctx(), Surface::Panel).edge("sc_timeline", Edge::Bottom).exact_size(current_h).frame(frame).show(ui, |ui| {
+            canvas::paint_timeline_2d(app, ui, false);
+        });
 
         Container::paint_inset(ui.painter(), response.response.rect - frame.outer_margin, frame);
         app.shell.history = Some(response.response.rect);
@@ -79,10 +68,7 @@ pub fn timeline(app: &mut SolveApp, ui: &mut Ui) {
     };
 
     // Upper edge interactive resize rail (shared by both Floating and Docked layouts)
-    let rail_bounds = Rect::from_x_y_ranges(
-        view_rect.x_range(),
-        (view_rect.top() - 4.0)..=(view_rect.top() + 6.0),
-    );
+    let rail_bounds = Rect::from_x_y_ranges(view_rect.x_range(), (view_rect.top() - 4.0)..=(view_rect.top() + 6.0));
     let overlay = Container::new(ui.ctx(), Surface::Chrome)
         .area(egui::Id::new("sc_timeline_2d_resize_rail"))
         .fixed_pos(rail_bounds.min)
@@ -134,13 +120,16 @@ mod tests {
         assert!((rail_handle.y - initial_rect.top()).abs() < 1.0);
 
         // Drag top rail upward by 60px
-        h.call("ui.drag", json!({
-            "x0": rail_handle.x,
-            "y0": rail_handle.y,
-            "x1": rail_handle.x,
-            "y1": rail_handle.y - 60.0,
-            "steps": 6,
-        }));
+        h.call(
+            "ui.drag",
+            json!({
+                "x0": rail_handle.x,
+                "y0": rail_handle.y,
+                "x1": rail_handle.x,
+                "y1": rail_handle.y - 60.0,
+                "steps": 6,
+            }),
+        );
         h.frames(2);
 
         let new_rect = crate::scenario::rect_of("history:card").unwrap();
@@ -148,11 +137,14 @@ mod tests {
 
         // Double-click rail to reset
         let new_rail = crate::scenario::handle_at("timeline:top_rail").unwrap();
-        h.call("ui.click", json!({
-            "x": new_rail.x,
-            "y": new_rail.y,
-            "double": true,
-        }));
+        h.call(
+            "ui.click",
+            json!({
+                "x": new_rail.x,
+                "y": new_rail.y,
+                "double": true,
+            }),
+        );
         h.frames(2);
         let reset_rect = crate::scenario::rect_of("history:card").unwrap();
         assert!((reset_rect.height() - canvas::DOCK_TOTAL_HEIGHT).abs() < 2.0);
@@ -165,13 +157,16 @@ mod tests {
         let docked_h = docked_rect.height();
         let docked_rail = crate::scenario::handle_at("timeline:top_rail").unwrap();
 
-        h.call("ui.drag", json!({
-            "x0": docked_rail.x,
-            "y0": docked_rail.y,
-            "x1": docked_rail.x,
-            "y1": docked_rail.y - 50.0,
-            "steps": 5,
-        }));
+        h.call(
+            "ui.drag",
+            json!({
+                "x0": docked_rail.x,
+                "y0": docked_rail.y,
+                "x1": docked_rail.x,
+                "y1": docked_rail.y - 50.0,
+                "steps": 5,
+            }),
+        );
         h.frames(2);
 
         let new_docked = crate::scenario::rect_of("history:strip").unwrap();
@@ -186,10 +181,16 @@ mod tests {
         let f0 = h.app.session.doc.features[0].id;
         let f1 = h.app.session.doc.features[1].id;
 
-        let res = h.app.run_heavy("timeline.group", json!({
-            "name": "Group 1",
-            "features": [f0, f1],
-        })).unwrap();
+        let res = h
+            .app
+            .run_heavy(
+                "timeline.group",
+                json!({
+                    "name": "Group 1",
+                    "features": [f0, f1],
+                }),
+            )
+            .unwrap();
         let gid = res["group"].as_u64().unwrap();
 
         let mut d = crate::dialogs::Dialog::rename_group(gid, "Group 1");
@@ -209,10 +210,7 @@ mod tests {
         h.step(&json!({"click": {"handle": "dialog:ok"}})).unwrap();
         h.frames(2);
 
-        assert_eq!(
-            h.app.session.doc.timeline_groups.iter().find(|g| g.id == gid).map(|g| g.name.as_str()),
-            Some("Custom Assembly")
-        );
+        assert_eq!(h.app.session.doc.timeline_groups.iter().find(|g| g.id == gid).map(|g| g.name.as_str()), Some("Custom Assembly"));
     }
 
     #[test]
@@ -237,11 +235,7 @@ mod tests {
         h.app.run("solid.combine", json!({"target": b0, "tools": [b1], "operation": "join"})).unwrap();
 
         let combine_feat = h.app.session.doc.features.last().unwrap();
-        let affected = canvas::feature_affected_components(
-            &h.app.session.doc,
-            Some(&h.app.session.model),
-            combine_feat,
-        );
+        let affected = canvas::feature_affected_components(&h.app.session.doc, Some(&h.app.session.model), combine_feat);
         assert_eq!(affected, vec![0, comp1]);
 
         // 5. Chamfer in Component 1 on edge of combined body
@@ -249,17 +243,18 @@ mod tests {
         let p0 = m.edges[0][0];
         let p1 = m.edges[0][1];
         let edge_mid = (p0 + p1) * 0.5;
-        h.app.run("solid.chamfer", json!({
-            "edges": [[edge_mid.x, edge_mid.y, edge_mid.z]],
-            "distance": 1.0,
-        })).unwrap();
+        h.app
+            .run(
+                "solid.chamfer",
+                json!({
+                    "edges": [[edge_mid.x, edge_mid.y, edge_mid.z]],
+                    "distance": 1.0,
+                }),
+            )
+            .unwrap();
 
         let chamfer_feat = h.app.session.doc.features.last().unwrap();
-        let chamfer_affected = canvas::feature_affected_components(
-            &h.app.session.doc,
-            Some(&h.app.session.model),
-            chamfer_feat,
-        );
+        let chamfer_affected = canvas::feature_affected_components(&h.app.session.doc, Some(&h.app.session.model), chamfer_feat);
         assert!(chamfer_affected.contains(&0) && chamfer_affected.contains(&comp1));
 
         // Render frames and verify no panics
@@ -285,11 +280,14 @@ mod tests {
         assert_eq!(h.app.session.doc.features[1].id, f1);
 
         // 3. Test horizontal reorder: move BoxB before BoxA
-        let res = h.app.run_heavy("timeline.reorder", json!({
-            "feature": f1,
-            "position": 0,
-            "active": true,
-        }));
+        let res = h.app.run_heavy(
+            "timeline.reorder",
+            json!({
+                "feature": f1,
+                "position": 0,
+                "active": true,
+            }),
+        );
         assert!(res.is_ok(), "reorder BoxB to position 0 should succeed");
         assert_eq!(h.app.session.doc.features[0].id, f1);
         assert_eq!(h.app.session.doc.features[1].id, f0);
@@ -313,10 +311,15 @@ mod tests {
         let p0 = m.edges[0][0];
         let p1 = m.edges[0][1];
         let edge_mid = (p0 + p1) * 0.5;
-        h.app.run("solid.chamfer", json!({
-            "edges": [[edge_mid.x, edge_mid.y, edge_mid.z]],
-            "distance": 1.0,
-        })).unwrap();
+        h.app
+            .run(
+                "solid.chamfer",
+                json!({
+                    "edges": [[edge_mid.x, edge_mid.y, edge_mid.z]],
+                    "distance": 1.0,
+                }),
+            )
+            .unwrap();
         let chamfer_id = h.app.session.doc.features[1].id;
 
         // 3. Verify dependency graph: chamfer depends on BaseBox
@@ -331,10 +334,13 @@ mod tests {
         assert!(cascade.contains(&box_id));
         assert!(cascade.contains(&chamfer_id));
 
-        let res = h.app.run_heavy("timeline.suppress", json!({
-            "features": cascade,
-            "suppressed": true,
-        }));
+        let res = h.app.run_heavy(
+            "timeline.suppress",
+            json!({
+                "features": cascade,
+                "suppressed": true,
+            }),
+        );
         assert!(res.is_ok());
         assert!(h.app.session.doc.feature(box_id).unwrap().suppressed);
         assert!(h.app.session.doc.feature(chamfer_id).unwrap().suppressed);
@@ -346,10 +352,13 @@ mod tests {
         assert!(unsuppress_cascade.contains(&box_id));
         assert!(unsuppress_cascade.contains(&chamfer_id));
 
-        let res = h.app.run_heavy("timeline.suppress", json!({
-            "features": unsuppress_cascade,
-            "suppressed": false,
-        }));
+        let res = h.app.run_heavy(
+            "timeline.suppress",
+            json!({
+                "features": unsuppress_cascade,
+                "suppressed": false,
+            }),
+        );
         assert!(res.is_ok());
         assert!(!h.app.session.doc.feature(box_id).unwrap().suppressed);
         assert!(!h.app.session.doc.feature(chamfer_id).unwrap().suppressed);
@@ -357,10 +366,13 @@ mod tests {
         assert!(!dep_graph.is_suppressed(&h.app.session.doc, chamfer_id));
 
         // 6. Re-suppress BaseBox and render frames to exercise UI chip drawing (dashed border & 50% opacity slashed eye)
-        let res = h.app.run_heavy("timeline.suppress", json!({
-            "features": cascade,
-            "suppressed": true,
-        }));
+        let res = h.app.run_heavy(
+            "timeline.suppress",
+            json!({
+                "features": cascade,
+                "suppressed": true,
+            }),
+        );
         assert!(res.is_ok());
 
         h.call("ui.resize", json!({"width": 1400, "height": 900}));

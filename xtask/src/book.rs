@@ -50,8 +50,9 @@ pub fn run(root: &Path, build: bool) -> Result<(), String> {
         }
         println!("book: {}", png.strip_prefix(root).unwrap_or(&png).display());
     }
-    let shot = "sample-plate.png";
-    std::fs::copy(root.join("docs/screenshots").join(shot), gen_dir.join(shot)).map_err(|e| format!("{shot}: {e}"))?;
+    for shot in ["sample-plate.png", "timeline-2d-overview.png", "timeline-2d-corridor-selection.png", "timeline-2d-dock-closeup.png"] {
+        std::fs::copy(root.join("docs/screenshots").join(shot), gen_dir.join(shot)).map_err(|e| format!("{shot}: {e}"))?;
+    }
 
     if build {
         let mut c = std::process::Command::new("mdbook");
