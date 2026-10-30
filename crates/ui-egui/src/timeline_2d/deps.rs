@@ -396,6 +396,67 @@ impl DependencyGraph {
         self.all_dependents.get(&id)
     }
 
+    /// Returns true if this feature is directly suppressed OR transitively suppressed by any of its prerequisite ancestors.
+    pub fn is_suppressed(&self, doc: &Document, id: u64) -> bool {
+        if doc.feature(id).is_some_and(|f| f.suppressed) {
+            return true;
+        }
+        if let Some(prereqs) = self.all_prereqs.get(&id) {
+            for &p in prereqs {
+                if doc.feature(p).is_some_and(|f| f.suppressed) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Collects `id` and all of its downstream dependent features that must be suppressed along with it.
+    pub fn collect_suppression_cascade(&self, id: u64) -> Vec<u64> {
+        self.collect_suppression_cascade_for_set(&[id])
+    }
+
+    /// Collects all features in `ids` and all of their downstream dependent features.
+    pub fn collect_suppression_cascade_for_set(&self, ids: &[u64]) -> Vec<u64> {
+        let mut set = BTreeSet::new();
+        for &id in ids {
+            set.insert(id);
+            if let Some(deps) = self.all_dependents.get(&id) {
+                for &d in deps {
+                    set.insert(d);
+                }
+            }
+        }
+        set.into_iter().collect()
+    }
+
+    /// Collects `id`, all of its currently-suppressed prerequisite ancestors, and all of its downstream dependents.
+    pub fn collect_unsuppression_cascade(&self, doc: &Document, id: u64) -> Vec<u64> {
+        self.collect_unsuppression_cascade_for_set(doc, &[id])
+    }
+
+    /// Collects all features in `ids`, all of their currently-suppressed prerequisite ancestors,
+    /// and all of their downstream dependents.
+    pub fn collect_unsuppression_cascade_for_set(&self, doc: &Document, ids: &[u64]) -> Vec<u64> {
+        let mut set = BTreeSet::new();
+        for &id in ids {
+            set.insert(id);
+            if let Some(prereqs) = self.all_prereqs.get(&id) {
+                for &p in prereqs {
+                    if doc.feature(p).is_some_and(|f| f.suppressed) {
+                        set.insert(p);
+                    }
+                }
+            }
+            if let Some(dependents) = self.all_dependents.get(&id) {
+                for &d in dependents {
+                    set.insert(d);
+                }
+            }
+        }
+        set.into_iter().collect()
+    }
+
     /// Computes the ripple push reorder mapping for array splicing:
     /// Moving `count` items from `from_slot` to `to_slot`.
     /// Returns a list of `(source_index, target_index)` shifts for all affected indices.

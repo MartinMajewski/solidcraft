@@ -324,12 +324,17 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                             }
                         }
 
+                        let is_suppressed = dep_graph.is_suppressed(&app.session.doc, fid);
+
                         // Attach rich hover tooltip showing action name, kind, status
                         let resp = if state.drag.is_none() {
                             let res = app.session.model.result(fid);
                             let err = res.and_then(|r| r.error.as_deref());
                             let warn = res.and_then(|r| r.warning.as_deref());
                             let mut tip = crate::timeline::status_text(&f.name, f.kind.type_name(), err, warn);
+                            if is_suppressed {
+                                tip.push_str("\nSuppressed (excluded from 3D solid geometry rebuild)");
+                            }
                             if !is_active {
                                 let steps_after = col_idx.saturating_sub(marker_visual_col) + 1;
                                 tip.push_str(&format!("\nInactive (rolled back, {} step(s) after marker)", steps_after));
@@ -370,6 +375,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                                 is_selected,
                                 is_prereq,
                                 is_dependent,
+                                is_suppressed,
                                 accent,
                                 &t,
                             );
@@ -378,7 +384,6 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                         // Attach context menu
                         if state.drag.is_none() {
                             let targets = crate::timeline::menu_targets(app, fid);
-                            let is_suppressed = f.suppressed;
                             let f_name = f.name.clone();
                             let is_adjacent = state.is_selection_adjacent(&dep_graph.features);
                             let sel_count = state.selected_features.len();
@@ -405,8 +410,22 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                                 ui.close();
                             }
                             let suppress_key = if is_suppressed { "timeline.unsuppress_features" } else { "timeline.suppress_features" };
-                            if crate::context_menu::button(ui, crate::i18n::tr(suppress_key), "suppress").clicked() {
-                                let _ = app.run_heavy("timeline.suppress", serde_json::json!({ "feature": fid }));
+                            let suppress_icon = if is_suppressed { "eye" } else { "suppress" };
+                            if crate::context_menu::button(ui, crate::i18n::tr(suppress_key), suppress_icon).clicked() {
+                                let base_targets = if state.selected_features.contains(&fid) {
+                                    state.selected_features.iter().copied().collect::<Vec<_>>()
+                                } else {
+                                    vec![fid]
+                                };
+                                let cascade_targets = if is_suppressed {
+                                    dep_graph.collect_unsuppression_cascade_for_set(&app.session.doc, &base_targets)
+                                } else {
+                                    dep_graph.collect_suppression_cascade_for_set(&base_targets)
+                                };
+                                let _ = app.run_heavy("timeline.suppress", serde_json::json!({
+                                    "features": cascade_targets,
+                                    "suppressed": !is_suppressed,
+                                }));
                                 ui.close();
                             }
                             if crate::context_menu::button(ui, crate::i18n::tr_label("Roll History Marker Here"), "rollback").clicked() {
@@ -679,6 +698,9 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                 let icon = crate::timeline::icon_of(&f.kind);
                 let icon_rect = Rect::from_center_size(float_rect.center(), vec2(20.0, 20.0));
                 crate::icons::paint_ink(&painter, icon_rect, icon, stroke_col);
+                if dep_graph.is_suppressed(&app.session.doc, drag_fid) {
+                    crate::icons::paint_icon(&painter, icon_rect, "suppress", 0.5);
+                }
             }
 
             // D. Finalize drop on mouse button release (horizontal reorder only)
@@ -1044,6 +1066,7 @@ fn paint_action_chip(
     is_selected: bool,
     is_prereq: bool,
     is_dependent: bool,
+    is_suppressed: bool,
     accent: crate::theme::TabAccent,
     t: &Tokens,
 ) {
@@ -1053,23 +1076,44 @@ fn paint_action_chip(
         if is_active { t.warning } else { t.text_dim }
     } else if is_dependent {
         if is_active { t.accent } else { t.border }
+    } else if is_suppressed || is_active {
+        t.border
     } else {
-        if is_active { t.border } else { t.border.gamma_multiply(0.5) }
+        t.border.gamma_multiply(0.5)
     };
 
     let bg_color = if is_selected {
         if is_active { accent.soft } else { t.panel }
+    } else if is_suppressed {
+        t.panel.gamma_multiply(0.7)
+    } else if is_active {
+        t.timeline_item
     } else {
-        if is_active { t.timeline_item } else { t.panel }
+        t.panel
     };
 
+    let stroke_width = if is_selected || is_prereq || is_dependent { 1.5 } else { 1.0 };
     p.rect_filled(rect, 4.0, bg_color);
-    p.rect_stroke(rect, 4.0, Stroke::new(if is_selected || is_prereq || is_dependent { 1.5 } else { 1.0 }, stroke_color), StrokeKind::Inside);
+    if is_suppressed {
+        let corners = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom(), rect.left_top()];
+        p.extend(egui::Shape::dashed_line(&corners, Stroke::new(stroke_width, stroke_color), 4.0, 3.0));
+    } else {
+        p.rect_stroke(rect, 4.0, Stroke::new(stroke_width, stroke_color), StrokeKind::Inside);
+    }
 
     // Master SVG icon from assets/icons/ui/design/svg
     let icon = crate::timeline::icon_of(&f.kind);
     let icon_rect = Rect::from_center_size(rect.center(), vec2(20.0, 20.0));
-    if is_active {
+    if is_suppressed {
+        // Base feature icon shines through underneath
+        if is_active {
+            crate::icons::paint_accented(p, icon_rect, icon, crate::ui_kit::feature_icon_accent(f.kind.type_name(), icon), 0.55);
+        } else {
+            crate::icons::paint_ink(p, icon_rect, icon, t.text_dim.gamma_multiply(0.4));
+        }
+        // Slashed eye overlay symbol at 50% opacity as requested
+        crate::icons::paint_icon(p, icon_rect, "suppress", 0.5);
+    } else if is_active {
         crate::icons::paint_accented(p, icon_rect, icon, crate::ui_kit::feature_icon_accent(f.kind.type_name(), icon), 1.0);
     } else {
         crate::icons::paint_ink(p, icon_rect, icon, t.text_dim);

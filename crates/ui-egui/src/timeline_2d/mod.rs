@@ -298,4 +298,72 @@ mod tests {
         h.call("ui.resize", json!({"width": 1400, "height": 900}));
         h.frames(2);
     }
+
+    #[test]
+    fn test_suppressed_chips_and_dependency_cascade() {
+        let mut h = Harness::new();
+        h.app.preferences.timeline_2d = true;
+
+        // 1. Base box in root component
+        h.app.run("solid.box", json!({"name": "BaseBox", "length": 30, "width": 30, "height": 15})).unwrap();
+        let box_id = h.app.session.doc.features[0].id;
+
+        // 2. Chamfer on an edge of BaseBox
+        let m = h.app.session.model.state().bodies[0].mesh();
+        let p0 = m.edges[0][0];
+        let p1 = m.edges[0][1];
+        let edge_mid = (p0 + p1) * 0.5;
+        h.app.run("solid.chamfer", json!({
+            "edges": [[edge_mid.x, edge_mid.y, edge_mid.z]],
+            "distance": 1.0,
+        })).unwrap();
+        let chamfer_id = h.app.session.doc.features[1].id;
+
+        // 3. Verify dependency graph: chamfer depends on BaseBox
+        let dep_graph = deps::DependencyGraph::from_doc(&h.app.session.doc);
+        assert!(dep_graph.is_dependent(box_id, chamfer_id));
+        assert!(dep_graph.is_prerequisite(chamfer_id, box_id));
+        assert!(!dep_graph.is_suppressed(&h.app.session.doc, box_id));
+        assert!(!dep_graph.is_suppressed(&h.app.session.doc, chamfer_id));
+
+        // 4. Suppression cascade: suppressing BaseBox must include dependent chamfer
+        let cascade = dep_graph.collect_suppression_cascade(box_id);
+        assert!(cascade.contains(&box_id));
+        assert!(cascade.contains(&chamfer_id));
+
+        let res = h.app.run_heavy("timeline.suppress", json!({
+            "features": cascade,
+            "suppressed": true,
+        }));
+        assert!(res.is_ok());
+        assert!(h.app.session.doc.feature(box_id).unwrap().suppressed);
+        assert!(h.app.session.doc.feature(chamfer_id).unwrap().suppressed);
+        assert!(dep_graph.is_suppressed(&h.app.session.doc, box_id));
+        assert!(dep_graph.is_suppressed(&h.app.session.doc, chamfer_id));
+
+        // 5. Unsuppression cascade: unsuppressing chamfer must restore required BaseBox
+        let unsuppress_cascade = dep_graph.collect_unsuppression_cascade(&h.app.session.doc, chamfer_id);
+        assert!(unsuppress_cascade.contains(&box_id));
+        assert!(unsuppress_cascade.contains(&chamfer_id));
+
+        let res = h.app.run_heavy("timeline.suppress", json!({
+            "features": unsuppress_cascade,
+            "suppressed": false,
+        }));
+        assert!(res.is_ok());
+        assert!(!h.app.session.doc.feature(box_id).unwrap().suppressed);
+        assert!(!h.app.session.doc.feature(chamfer_id).unwrap().suppressed);
+        assert!(!dep_graph.is_suppressed(&h.app.session.doc, box_id));
+        assert!(!dep_graph.is_suppressed(&h.app.session.doc, chamfer_id));
+
+        // 6. Re-suppress BaseBox and render frames to exercise UI chip drawing (dashed border & 50% opacity slashed eye)
+        let res = h.app.run_heavy("timeline.suppress", json!({
+            "features": cascade,
+            "suppressed": true,
+        }));
+        assert!(res.is_ok());
+
+        h.call("ui.resize", json!({"width": 1400, "height": 900}));
+        h.frames(3);
+    }
 }
