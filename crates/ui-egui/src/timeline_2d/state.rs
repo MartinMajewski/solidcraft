@@ -1,5 +1,6 @@
 //! Interactive state, scrolling, multi-selection, and drag models for the 2D History Browser.
 
+use egui::Pos2;
 use std::collections::BTreeSet;
 
 /// Dragging state for interactive timeline gestures.
@@ -7,8 +8,14 @@ use std::collections::BTreeSet;
 pub enum DragTarget {
     /// Scrubbing the rollback marker head pin across timeline columns.
     Marker,
-    /// Dragging a feature action chip for ripple push reordering.
-    Feature { id: u64, start_slot: usize },
+    /// Dragging a feature action chip for ripple push reordering or component moving.
+    Feature {
+        id: u64,
+        start_col: usize,
+        start_track: usize,
+        start_component: u64,
+        current_pos: Pos2,
+    },
     /// Dragging a virtual group chip.
     Group { id: u64, start_slot: usize },
 }
