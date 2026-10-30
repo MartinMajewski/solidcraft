@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use egui::{
     FontId, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2,
 };
-use solidcraft_engine::doc::{Document, Feature};
+use solidcraft_engine::doc::{Document, Feature, FeatureKind, ModelBody};
 use crate::SolveApp;
 use crate::theme::Tokens;
 use crate::ui_kit::{HistoryTransport, Menu};
@@ -81,6 +81,8 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
     };
     component_names.insert(0, root_name);
 
+    let model_state = app.session.model.state();
+    let model_bodies = Some(model_state.bodies.as_slice());
     for comp in &app.session.doc.components {
         if comp.id != 0 && !component_ids.contains(&comp.id) {
             component_ids.push(comp.id);
@@ -89,9 +91,15 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
         }
     }
     for f in &app.session.doc.features {
-        if !component_ids.contains(&f.component) {
-            component_ids.push(f.component);
-            component_names.insert(f.component, format!("Component {}", f.component));
+        for cid in feature_affected_components(&app.session.doc, model_bodies, f) {
+            if !component_ids.contains(&cid) {
+                let comp_opt = app.session.doc.components.iter().find(|c| c.id == cid);
+                let name = comp_opt.map(|c| c.name.clone()).unwrap_or_else(|| format!("Component {}", cid));
+                let color = comp_opt.and_then(|c| c.identification_color);
+                component_ids.push(cid);
+                component_names.insert(cid, name);
+                component_colors.insert(cid, color);
+            }
         }
     }
 
@@ -225,34 +233,63 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                     painter.rect_filled(banner_rect, 0.0, tint);
                 }
 
-                // If multi-component, draw dead-centered vertical dotted connector
-                if features.len() > 1 {
-                    let mut min_y = f32::MAX;
-                    let mut max_y = f32::MIN;
-                    for &fid in features {
-                        if let Some(f) = app.session.doc.feature(fid)
-                            && let Some(track_idx) = component_ids.iter().position(|&cid| cid == f.component)
-                        {
-                            let cy = total_rect.top() + HEADER_TOTAL_HEIGHT + track_idx as f32 * ROW_HEIGHT + ROW_HEIGHT / 2.0 - state.scroll_y + state.overscroll_y;
-                            min_y = min_y.min(cy);
-                            max_y = max_y.max(cy);
+                let is_active = col_idx < marker_visual_col;
+
+                // Collect all chips to paint for this column: (fid, track_idx)
+                let mut column_chips: Vec<(u64, usize)> = Vec::new();
+                let mut all_track_indices: Vec<usize> = Vec::new();
+                let mut any_selected = false;
+
+                for &fid in features {
+                    if let Some(f) = app.session.doc.feature(fid) {
+                        let affected = feature_affected_components(&app.session.doc, model_bodies, f);
+                        let mut tracks: Vec<usize> = affected
+                            .iter()
+                            .filter_map(|cid| component_ids.iter().position(|id| id == cid))
+                            .collect();
+                        if tracks.is_empty() {
+                            let default_track = component_ids.iter().position(|&cid| cid == f.component).unwrap_or(0);
+                            tracks.push(default_track);
+                        }
+                        tracks.sort_unstable();
+                        tracks.dedup();
+
+                        if state.is_selected(fid) {
+                            any_selected = true;
+                        }
+
+                        for &t_idx in &tracks {
+                            column_chips.push((fid, t_idx));
+                            all_track_indices.push(t_idx);
                         }
                     }
-                    if min_y < max_y && min_y < grid_rect.bottom() && max_y > grid_rect.top() {
+                }
+
+                all_track_indices.sort_unstable();
+                all_track_indices.dedup();
+
+                // If multi-component (or multiple actions across tracks), draw dead-centered vertical dotted connector
+                if all_track_indices.len() > 1
+                    && let (Some(&min_track), Some(&max_track)) = (all_track_indices.first(), all_track_indices.last())
+                {
+                    let y1 = total_rect.top() + HEADER_TOTAL_HEIGHT + min_track as f32 * ROW_HEIGHT + ROW_HEIGHT / 2.0 - state.scroll_y + state.overscroll_y;
+                    let y2 = total_rect.top() + HEADER_TOTAL_HEIGHT + max_track as f32 * ROW_HEIGHT + ROW_HEIGHT / 2.0 - state.scroll_y + state.overscroll_y;
+
+                    if y1 < y2 && y1 < grid_rect.bottom() && y2 > grid_rect.top() {
                         let cx = col_x + COL_WIDTH / 2.0;
-                        let line_color = if col_idx < marker_visual_col {
-                            accent.color
+                        let line_color = if any_selected {
+                            if is_active { accent.color } else { t.text_dim }
                         } else {
-                            t.text_dim
+                            if is_active { t.text_dim } else { t.border.gamma_multiply(0.7) }
                         };
-                        paint_dotted_vertical_line(&grid_painter, cx, min_y, max_y, line_color);
+                        let dot_radius = if any_selected { 1.5 } else { 1.25 };
+                        paint_dotted_vertical_line(&grid_painter, cx, y1, y2, line_color, dot_radius);
                     }
                 }
 
                 // Paint individual chips
-                for &fid in features {
+                for (fid, track_idx) in column_chips {
                     if let Some(f) = app.session.doc.feature(fid) {
-                        let track_idx = component_ids.iter().position(|&cid| cid == f.component).unwrap_or(0);
                         let chip_top = total_rect.top() + HEADER_TOTAL_HEIGHT + track_idx as f32 * ROW_HEIGHT + (ROW_HEIGHT - CHIP_HEIGHT) / 2.0 - state.scroll_y + state.overscroll_y;
                         let chip_rect = Rect::from_min_size(pos2(col_x + (COL_WIDTH - CHIP_WIDTH) / 2.0, chip_top), vec2(CHIP_WIDTH, CHIP_HEIGHT));
 
@@ -265,7 +302,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                         let is_prereq = selected_id.is_some_and(|sel| dep_graph.is_prerequisite(sel, fid));
                         let is_dependent = selected_id.is_some_and(|sel| dep_graph.is_dependent(sel, fid));
 
-                        let resp = ui.interact(chip_rect, ui.id().with(("chip_2d", fid)), Sense::click_and_drag());
+                        let resp = ui.interact(chip_rect, ui.id().with(("chip_2d", fid, track_idx)), Sense::click_and_drag());
                         if resp.hovered() {
                             state.hovered_feature = Some(fid);
                         }
@@ -748,14 +785,15 @@ fn paint_two_tier_header(
 
                 let title_text = format!("{} ({})", grp_name, member_count);
                 let galley = p.layout_no_wrap(title_text, FontId::proportional(10.0), text_color);
+                let title_w = galley.size().x;
                 let title_pos = pos2(banner_rect.left() + 18.0, banner_rect.center().y - galley.size().y / 2.0);
                 p.galley(title_pos, galley, text_color);
 
-                let pill_w = banner_rect.width();
+                let available_right = banner_rect.width() - (title_w + 24.0);
                 let right_pos = pos2(banner_rect.right() - 6.0, banner_rect.center().y);
-                if pill_w >= 130.0 {
+                if available_right > 50.0 {
                     p.text(right_pos, egui::Align2::RIGHT_CENTER, "Close ▴", FontId::proportional(9.0), text_color);
-                } else if pill_w >= 85.0 {
+                } else if available_right > 16.0 {
                     p.text(right_pos, egui::Align2::RIGHT_CENTER, "▴", FontId::proportional(9.0), text_color);
                 }
             }
@@ -1143,11 +1181,137 @@ fn paint_bracket_close(
     p.line_segment([pos2(x, bottom), pos2(x - tick_len, bottom)], stroke);
 }
 
-fn paint_dotted_vertical_line(p: &egui::Painter, x: f32, y_start: f32, y_end: f32, color: egui::Color32) {
+fn paint_dotted_vertical_line(p: &egui::Painter, x: f32, y_start: f32, y_end: f32, color: egui::Color32, radius: f32) {
     let dot_spacing = 6.0;
     let mut y = y_start;
     while y <= y_end {
-        p.circle_filled(pos2(x, y), 1.5, color);
+        p.circle_filled(pos2(x, y), radius, color);
         y += dot_spacing;
     }
+}
+
+/// Returns the sorted, deduplicated list of component IDs affected by a feature.
+pub fn feature_affected_components(
+    doc: &Document,
+    model_bodies: Option<&[ModelBody]>,
+    f: &Feature,
+) -> Vec<u64> {
+    let mut comps = BTreeSet::new();
+    comps.insert(f.component);
+
+    let resolve_body = |b: &str| -> Option<u64> {
+        let trimmed = b.trim();
+        if trimmed.is_empty() || trimmed == "*" {
+            return None;
+        }
+        if let Some(bodies) = model_bodies
+            && let Some(mb) = bodies.iter().find(|body| body.name.trim() == trimmed)
+        {
+            return Some(doc.model_body_component(mb));
+        }
+        if let Some(&cid) = doc.body_components.get(trimmed) {
+            return Some(cid);
+        }
+        for prev in &doc.features {
+            if prev.body_names.iter().any(|bn| bn.trim() == trimmed) || prev.name.trim() == trimmed {
+                return Some(prev.component);
+            }
+        }
+        Some(doc.body_component(trimmed, f.id))
+    };
+
+    for p in &f.participants {
+        if let Some(cid) = resolve_body(p) {
+            comps.insert(cid);
+        }
+    }
+
+    match &f.kind {
+        FeatureKind::Combine { target, tools, .. } => {
+            if let Some(cid) = resolve_body(target.as_ref()) {
+                comps.insert(cid);
+            }
+            for tool in tools {
+                if let Some(cid) = resolve_body(tool.as_ref()) {
+                    comps.insert(cid);
+                }
+            }
+        }
+        FeatureKind::BodyTransfer { from, to, bodies, .. } => {
+            comps.insert(*from);
+            comps.insert(*to);
+            for b in bodies {
+                if let Some(cid) = resolve_body(b.as_ref()) {
+                    comps.insert(cid);
+                }
+            }
+        }
+        FeatureKind::Extrude { targets, .. }
+        | FeatureKind::Revolve { targets, .. }
+        | FeatureKind::Loft { targets, .. }
+        | FeatureKind::Sweep { targets, .. }
+        | FeatureKind::Emboss { targets, .. } => {
+            for t in targets {
+                if let Some(cid) = resolve_body(t.as_ref()) {
+                    comps.insert(cid);
+                }
+            }
+        }
+        FeatureKind::Fillet { body: Some(b), .. }
+        | FeatureKind::Chamfer { body: Some(b), .. }
+        | FeatureKind::Split { body: b, .. } => {
+            if let Some(cid) = resolve_body(b.as_ref()) {
+                comps.insert(cid);
+            }
+        }
+        FeatureKind::Move { bodies, .. }
+        | FeatureKind::Scale { bodies, .. }
+        | FeatureKind::Align { bodies, .. }
+        | FeatureKind::Remove { bodies, .. } => {
+            for b in bodies {
+                if let Some(cid) = resolve_body(b.as_ref()) {
+                    comps.insert(cid);
+                }
+            }
+        }
+        FeatureKind::BoundaryFill { tools, .. } => {
+            for t in tools {
+                if let Some(cid) = resolve_body(t.as_ref()) {
+                    comps.insert(cid);
+                }
+            }
+        }
+        FeatureKind::Pattern { bodies, features, .. } => {
+            for b in bodies {
+                if let Some(cid) = resolve_body(b.as_ref()) {
+                    comps.insert(cid);
+                }
+            }
+            for &fid in features {
+                if let Some(feat) = doc.feature(fid.0) {
+                    comps.insert(feat.component);
+                }
+            }
+        }
+        FeatureKind::Mirror { bodies, features, placements, .. } => {
+            for b in bodies {
+                if let Some(cid) = resolve_body(b.as_ref()) {
+                    comps.insert(cid);
+                }
+            }
+            for &fid in features {
+                if let Some(feat) = doc.feature(fid.0) {
+                    comps.insert(feat.component);
+                }
+            }
+            for path in placements {
+                if let Some(&cid) = path.last() {
+                    comps.insert(cid);
+                }
+            }
+        }
+        _ => {}
+    }
+
+    comps.into_iter().collect()
 }

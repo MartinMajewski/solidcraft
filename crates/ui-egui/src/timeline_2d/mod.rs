@@ -214,4 +214,38 @@ mod tests {
             Some("Custom Assembly")
         );
     }
+
+    #[test]
+    fn test_multi_component_chips_and_connector() {
+        let mut h = Harness::new();
+        h.app.preferences.timeline_2d = true;
+
+        // 1. Box in root component 0
+        h.app.run("solid.box", json!({"length": 20, "width": 20, "height": 10})).unwrap();
+
+        // 2. Create Component 1
+        let c1 = h.app.run("component.create", json!({"name": "Housing", "activate": true})).unwrap();
+        let comp1 = c1["component"].as_u64().unwrap();
+
+        // 3. Box in Component 1
+        h.app.run("solid.box", json!({"length": 20, "width": 20, "height": 10, "corner": [5, 0, 0]})).unwrap();
+
+        let b0 = h.app.session.model.state().bodies[0].name.clone();
+        let b1 = h.app.session.model.state().bodies[1].name.clone();
+
+        // 4. Combine b0 (in component 0) and b1 (in component 1)
+        h.app.run("solid.combine", json!({"target": b0, "tools": [b1], "operation": "join"})).unwrap();
+
+        let combine_feat = h.app.session.doc.features.last().unwrap();
+        let affected = canvas::feature_affected_components(
+            &h.app.session.doc,
+            Some(h.app.session.model.state().bodies.as_slice()),
+            combine_feat,
+        );
+        assert_eq!(affected, vec![0, comp1]);
+
+        // Render frames and verify no panics
+        h.call("ui.resize", json!({"width": 1400, "height": 900}));
+        h.frames(3);
+    }
 }
