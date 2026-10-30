@@ -8,12 +8,11 @@ use std::collections::BTreeSet;
 pub enum DragTarget {
     /// Scrubbing the rollback marker head pin across timeline columns.
     Marker,
-    /// Dragging a feature action chip for ripple push reordering or component moving.
+    /// Dragging a feature action chip horizontally for ripple push reordering.
     Feature {
         id: u64,
         start_col: usize,
-        start_track: usize,
-        start_component: u64,
+        track_idx: usize,
         current_pos: Pos2,
     },
     /// Dragging a virtual group chip.

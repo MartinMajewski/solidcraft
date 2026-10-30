@@ -268,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn test_chip_drag_reorder_and_component_move() {
+    fn test_chip_drag_horizontal_reorder() {
         let mut h = Harness::new();
         h.app.preferences.timeline_2d = true;
 
@@ -280,16 +280,11 @@ mod tests {
         h.app.run("solid.box", json!({"name": "BoxB", "length": 15, "width": 15, "height": 10, "corner": [50, 0, 0]})).unwrap();
         let f1 = h.app.session.doc.features[1].id;
 
-        // 3. Create Component 1
-        let c1 = h.app.run("component.create", json!({"name": "Housing", "activate": false})).unwrap();
-        let comp1 = c1["component"].as_u64().unwrap();
-
-        // Verify initial state
+        // Verify initial sequence: [BoxA, BoxB]
         assert_eq!(h.app.session.doc.features[0].id, f0);
         assert_eq!(h.app.session.doc.features[1].id, f1);
-        assert_eq!(h.app.session.doc.features[0].component, 0);
 
-        // 4. Test horizontal reorder: move BoxB before BoxA
+        // 3. Test horizontal reorder: move BoxB before BoxA
         let res = h.app.run_heavy("timeline.reorder", json!({
             "feature": f1,
             "position": 0,
@@ -298,18 +293,6 @@ mod tests {
         assert!(res.is_ok(), "reorder BoxB to position 0 should succeed");
         assert_eq!(h.app.session.doc.features[0].id, f1);
         assert_eq!(h.app.session.doc.features[1].id, f0);
-
-        // 5. Test vertical component move: move BoxA into Housing
-        let res = h.app.run_heavy("component.move_features", json!({
-            "features": [f0],
-            "component": comp1,
-        }));
-        assert!(res.is_ok(), "move BoxA into Housing component should succeed");
-        assert_eq!(
-            h.app.session.doc.feature(f0).map(|f| f.component),
-            Some(comp1),
-            "BoxA should now belong to Housing"
-        );
 
         // Render frames with drag state active
         h.call("ui.resize", json!({"width": 1400, "height": 900}));

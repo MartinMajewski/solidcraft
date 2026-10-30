@@ -295,7 +295,6 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                 // Paint individual chips
                 for (fid, track_idx) in column_chips {
                     if let Some(f) = app.session.doc.feature(fid) {
-                        let track_comp_id = component_ids.get(track_idx).copied().unwrap_or(f.component);
                         let chip_top = total_rect.top() + HEADER_TOTAL_HEIGHT + track_idx as f32 * ROW_HEIGHT + (ROW_HEIGHT - CHIP_HEIGHT) / 2.0 - state.scroll_y + state.overscroll_y;
                         let chip_rect = Rect::from_min_size(pos2(col_x + (COL_WIDTH - CHIP_WIDTH) / 2.0, chip_top), vec2(CHIP_WIDTH, CHIP_HEIGHT));
 
@@ -317,8 +316,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                             state.drag = Some(super::state::DragTarget::Feature {
                                 id: fid,
                                 start_col: col_idx,
-                                start_track: track_idx,
-                                start_component: track_comp_id,
+                                track_idx,
                                 current_pos: pointer_pos.unwrap_or(chip_rect.center()),
                             });
                             if !state.is_selected(fid) {
@@ -603,12 +601,11 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
         painter.circle_filled(pin_center, 1.5, accent.color);
     }
 
-    // 12. Active Drag-and-Drop Processing for Feature Action Chips
+    // 12. Active Drag-and-Drop Processing for Feature Action Chips (Horizontal Reordering)
     if let Some(super::state::DragTarget::Feature {
         id: drag_fid,
         start_col,
-        start_track,
-        start_component,
+        track_idx,
         current_pos: last_pos,
     }) = state.drag
     {
@@ -619,8 +616,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
             state.drag = Some(super::state::DragTarget::Feature {
                 id: drag_fid,
                 start_col,
-                start_track,
-                start_component,
+                track_idx,
                 current_pos,
             });
 
@@ -631,20 +627,15 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
             let col_f = (current_pos.x - grid_origin_x + state.scroll_x) / COL_WIDTH;
             let target_visual_col = (col_f.floor() as isize).clamp(0, (num_columns.saturating_sub(1)) as isize) as usize;
 
-            let row_f = (current_pos.y - content_tracks_top) / ROW_HEIGHT;
-            let target_track_idx = (row_f.floor() as isize).clamp(0, (component_ids.len().saturating_sub(1)) as isize) as usize;
-            let target_comp_id = component_ids.get(target_track_idx).copied().unwrap_or(0);
-
+            // Constrained to the original component track row horizontally
             let mut single_sel = BTreeSet::new();
             single_sel.insert(drag_fid);
             let drag_corridor = compute_visual_corridor(&visual_columns, &dep_graph, &single_sel);
-            let is_valid_col = drag_corridor.is_some_and(|(min_c, max_c)| target_visual_col >= min_c && target_visual_col <= max_c);
-            let can_move_comp = target_comp_id == start_component || app.session.doc.marker.is_none();
-            let is_valid_drop = is_valid_col && can_move_comp;
+            let is_valid_drop = drag_corridor.is_some_and(|(min_c, max_c)| target_visual_col >= min_c && target_visual_col <= max_c);
 
-            // A. Target cell highlight in grid
+            // A. Target cell highlight in grid (constrained to origin track row)
             let target_cell_x = grid_origin_x + target_visual_col as f32 * COL_WIDTH - state.scroll_x;
-            let target_cell_y = content_tracks_top + target_track_idx as f32 * ROW_HEIGHT;
+            let target_cell_y = content_tracks_top + track_idx as f32 * ROW_HEIGHT;
             let target_cell_rect = Rect::from_min_size(pos2(target_cell_x, target_cell_y), vec2(COL_WIDTH, ROW_HEIGHT));
 
             if target_cell_rect.intersects(grid_rect) {
@@ -663,7 +654,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
             }
 
             // B. Vertical insertion drop bar
-            if target_visual_col != start_col && is_valid_col {
+            if target_visual_col != start_col && is_valid_drop {
                 let bar_x = if target_visual_col > start_col {
                     target_cell_x + COL_WIDTH
                 } else {
@@ -676,9 +667,11 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                 grid_painter.rect_filled(bar_rect, 1.0, t.sketch_accent);
             }
 
-            // C. Floating dragged chip under cursor
+            // C. Floating dragged chip locked to horizontal rail of its component track
             if let Some(f) = app.session.doc.feature(drag_fid) {
-                let float_rect = Rect::from_center_size(current_pos, vec2(CHIP_WIDTH * 1.08, CHIP_WIDTH * 1.08));
+                let track_center_y = target_cell_y + ROW_HEIGHT / 2.0;
+                let float_center = pos2(current_pos.x, track_center_y);
+                let float_rect = Rect::from_center_size(float_center, vec2(CHIP_WIDTH * 1.08, CHIP_WIDTH * 1.08));
                 let stroke_col = if is_valid_drop { t.form_success } else { t.error };
                 painter.rect_filled(float_rect, egui::CornerRadius::same(t.radius_sm), t.panel);
                 painter.rect_stroke(float_rect, egui::CornerRadius::same(t.radius_sm), Stroke::new(2.0, stroke_col), StrokeKind::Inside);
@@ -688,27 +681,12 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                 crate::icons::paint_ink(&painter, icon_rect, icon, stroke_col);
             }
 
-            // D. Finalize drop on mouse button release
+            // D. Finalize drop on mouse button release (horizontal reorder only)
             if ui.input(|i| i.pointer.any_released()) {
                 state.drag = None;
                 let mut changed = false;
 
-                // 1. Move to target component vertically if changed
-                if target_track_idx != start_track
-                    && target_comp_id != start_component
-                    && app.session.doc.marker.is_none()
-                {
-                    let res = app.run_heavy("component.move_features", serde_json::json!({
-                        "features": [drag_fid],
-                        "component": target_comp_id,
-                    }));
-                    if res.is_ok() {
-                        changed = true;
-                    }
-                }
-
-                // 2. Reorder slot horizontally within corridor if changed
-                if target_visual_col != start_col && is_valid_col {
+                if target_visual_col != start_col && is_valid_drop {
                     let target_fid = if target_visual_col > start_col {
                         visual_columns.get(target_visual_col).and_then(|vc| vc.feature_ids().last().copied())
                     } else {
