@@ -17,12 +17,20 @@ pub fn floating_rect(available: Rect) -> Rect {
     Container::floating_card(Surface::Panel).bottom_strip_rect(available, canvas::DOCK_TOTAL_HEIGHT)
 }
 
+/// Computes the floating card rectangle with a custom height.
+pub fn floating_rect_with_height(available: Rect, height: f32) -> Rect {
+    Container::floating_card(Surface::Panel).bottom_strip_rect(available, height)
+}
+
 /// Renders the 2D timeline dock frame and contents.
 pub fn timeline(app: &mut SolveApp, ui: &mut Ui) {
     let t = Tokens::get();
     app.shell.history_dock_space = Some(ui.available_rect_before_wrap());
+    let height_id = egui::Id::new("sc_timeline_2d_height");
+
     if Container::for_layout(app.ui.layout, Surface::Panel).floating() {
-        let rect = floating_rect(ui.available_rect_before_wrap());
+        let remembered_h: f32 = ui.ctx().data_mut(|d| d.get_persisted::<f32>(height_id)).unwrap_or(canvas::DOCK_TOTAL_HEIGHT);
+        let rect = floating_rect_with_height(ui.available_rect_before_wrap(), remembered_h);
         if !rect.is_finite() || rect.width() < 1.0 || rect.height() < 30.0 {
             app.shell.history = None;
             return;
@@ -38,8 +46,7 @@ pub fn timeline(app: &mut SolveApp, ui: &mut Ui) {
         let min_h = canvas::HEADER_TOTAL_HEIGHT + canvas::ROW_HEIGHT;
         let max_h = (available.height() * 0.75).max(min_h);
 
-        let height_id = egui::Id::new("sc_timeline_2d_height");
-        let remembered_h: f32 = ui.ctx().data(|d| d.get_temp(height_id)).unwrap_or(canvas::DOCK_TOTAL_HEIGHT);
+        let remembered_h: f32 = ui.ctx().data_mut(|d| d.get_persisted::<f32>(height_id)).unwrap_or(canvas::DOCK_TOTAL_HEIGHT);
         let current_h = remembered_h.clamp(min_h, max_h);
 
         let rounding = egui::CornerRadius {
@@ -54,22 +61,49 @@ pub fn timeline(app: &mut SolveApp, ui: &mut Ui) {
 
         let response = Container::new(ui.ctx(), Surface::Panel)
             .edge("sc_timeline", Edge::Bottom)
-            .resizable(true)
-            .default_size(current_h)
-            .size_range(min_h..=max_h)
+            .exact_size(current_h)
             .frame(frame)
             .show(ui, |ui| {
                 canvas::paint_timeline_2d(app, ui, false);
             });
 
-        let actual_h = response.response.rect.height();
-        if (actual_h - remembered_h).abs() > 0.5 {
-            ui.ctx().data_mut(|d| d.insert_temp(height_id, actual_h));
-        }
-
         Container::paint_inset(ui.painter(), response.response.rect - frame.outer_margin, frame);
         app.shell.history = Some(response.response.rect);
         crate::scenario::publish_rect("history:strip", response.response.rect);
         crate::scenario::publish_handle("timeline:top_rail", pos2(response.response.rect.center().x, response.response.rect.top()));
+
+        // Upper edge interactive resize overlay
+        let rail_bounds = Rect::from_x_y_ranges(
+            response.response.rect.x_range(),
+            (response.response.rect.top() - 5.0)..=(response.response.rect.top() + 5.0),
+        );
+        let overlay = Container::new(ui.ctx(), Surface::Chrome)
+            .area(egui::Id::new("sc_timeline_top_resize_overlay"))
+            .fixed_pos(rail_bounds.min)
+            .movable(false)
+            .order(egui::Order::Middle);
+        overlay.show(ui.ctx(), |ui| {
+            ui.set_min_size(rail_bounds.size());
+            let (rect, resp) = ui.allocate_exact_size(rail_bounds.size(), egui::Sense::click_and_drag());
+            let resp = resp.on_hover_cursor(egui::CursorIcon::ResizeVertical);
+            if resp.hovered() || resp.dragged() {
+                ui.painter().line_segment(
+                    [pos2(rect.left(), response.response.rect.top()), pos2(rect.right(), response.response.rect.top())],
+                    egui::Stroke::new(2.0, t.accent),
+                );
+            }
+            if resp.dragged() {
+                let dy = ui.input(|i| i.pointer.delta().y);
+                if dy.is_finite() && dy != 0.0 {
+                    let new_h = (current_h - dy).clamp(min_h, max_h);
+                    ui.ctx().data_mut(|d| d.insert_persisted(height_id, new_h));
+                    ui.ctx().request_repaint();
+                }
+            }
+            if resp.double_clicked() {
+                ui.ctx().data_mut(|d| d.insert_persisted(height_id, canvas::DOCK_TOTAL_HEIGHT));
+                ui.ctx().request_repaint();
+            }
+        });
     }
 }
