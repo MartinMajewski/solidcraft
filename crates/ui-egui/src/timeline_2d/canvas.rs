@@ -338,73 +338,8 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                     }
                 }
             }
-            VisualColumn::FoldedGroup { group_id, features } => {
-                let card_top = total_rect.top() + HEADER_T1_HEIGHT;
-                let card_rect = Rect::from_min_size(
-                    pos2(col_x + (COL_WIDTH - CHIP_WIDTH) / 2.0, card_top),
-                    vec2(CHIP_WIDTH, VIRTUAL_GROUP_HEIGHT),
-                );
-
-                let first_slot = features.first().and_then(|id| dep_graph.id_to_index.get(id)).copied().unwrap_or(0);
-                let is_active = first_slot < marker_slot;
-                let is_group_selected = features.iter().any(|id| state.is_selected(*id));
-
-                let grp_name = app
-                    .session
-                    .doc
-                    .timeline_groups
-                    .iter()
-                    .find(|g| g.id == *group_id)
-                    .map(|g| g.name.clone())
-                    .unwrap_or_else(|| format!("Group {group_id}"));
-
-                let resp = ui.interact(card_rect, ui.id().with(("grp_card", *group_id)), Sense::click_and_drag());
-                if resp.hovered() {
-                    state.hovered_group = Some(*group_id);
-                }
-
-                if resp.clicked() {
-                    state.selected_features.clear();
-                    for &fid in features {
-                        state.selected_features.insert(fid);
-                    }
-                }
-                if resp.double_clicked() {
-                    state.toggle_group_fold(*group_id);
-                }
-
-                // Rich hover tooltip
-                let mut tooltip_feats = Vec::new();
-                for &fid in features {
-                    if let Some(f) = app.session.doc.feature(fid) {
-                        let step = dep_graph.id_to_index.get(&fid).copied().unwrap_or(0) + 1;
-                        let comp_name = component_names.get(&f.component).map(|s| s.as_str()).unwrap_or("Component");
-                        tooltip_feats.push((step, f.name.as_str(), comp_name));
-                    }
-                }
-                let tip = Timeline2DState::format_group_tooltip(&grp_name, &tooltip_feats, is_active);
-                let resp = resp.on_hover_text(tip);
-
-                // Group Context Menu
-                let gid = *group_id;
-                let g_feats = features.clone();
-                Menu::context(&resp, |ui| {
-                    if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_open_group"), "folder").clicked() {
-                        state.set_group_folded(gid, false);
-                        ui.close();
-                    }
-                    if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_delete_group_expand"), "folder").clicked() {
-                        let _ = app.run_heavy("timeline.ungroup", serde_json::json!({ "group": gid }));
-                        ui.close();
-                    }
-                    if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_delete_group_all"), "delete").clicked() {
-                        crate::timeline::delete_features(app, g_feats);
-                        let _ = app.run_heavy("timeline.ungroup", serde_json::json!({ "group": gid }));
-                        ui.close();
-                    }
-                });
-
-                paint_virtual_group_chip(&painter, card_rect, &grp_name, features.len(), is_active, is_group_selected, &t);
+            VisualColumn::FoldedGroup { .. } => {
+                // Handled in Step 9b after header background so the integrated header cap is visible on Tier 2
             }
         }
     }
@@ -423,6 +358,94 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
         &t,
         &mut state,
     );
+
+    // 9b. Paint Folded Group Virtual Chips (starts on Tier 2 of Header, spans component tracks)
+    for (col_idx, col) in visual_columns.iter().enumerate() {
+        let col_x = grid_origin_x + col_idx as f32 * COL_WIDTH - state.scroll_x;
+        if col_x + COL_WIDTH < grid_origin_x || col_x > total_rect.right() {
+            continue;
+        }
+
+        if let VisualColumn::FoldedGroup { group_id, features } = col {
+            let card_top = total_rect.top() + HEADER_T1_HEIGHT + 2.0;
+            let card_bottom = ((total_rect.top() + HEADER_TOTAL_HEIGHT + component_ids.len().max(1) as f32 * ROW_HEIGHT - 6.0 - state.scroll_y + state.overscroll_y).min(total_rect.bottom() - 6.0)).max(card_top + HEADER_T2_HEIGHT + 24.0);
+            let card_height = card_bottom - card_top;
+            let card_rect = Rect::from_min_size(
+                pos2(col_x + (COL_WIDTH - CHIP_WIDTH) / 2.0, card_top),
+                vec2(CHIP_WIDTH, card_height),
+            );
+
+            let first_slot = features.first().and_then(|id| dep_graph.id_to_index.get(id)).copied().unwrap_or(0);
+            let is_active = first_slot < marker_slot;
+            let is_group_selected = features.iter().any(|id| state.is_selected(*id));
+
+            let grp_name = app
+                .session
+                .doc
+                .timeline_groups
+                .iter()
+                .find(|g| g.id == *group_id)
+                .map(|g| g.name.clone())
+                .unwrap_or_else(|| format!("Group {group_id}"));
+
+            let header_cap_rect = Rect::from_min_size(card_rect.left_top(), vec2(card_rect.width(), HEADER_T2_HEIGHT - 2.0));
+
+            let resp = ui.interact(card_rect, ui.id().with(("grp_card", *group_id)), Sense::click_and_drag());
+            if resp.hovered() {
+                state.hovered_group = Some(*group_id);
+                if let Some(pos) = pointer_pos && header_cap_rect.contains(pos) {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                }
+            }
+
+            if resp.clicked() {
+                if let Some(pos) = pointer_pos && header_cap_rect.contains(pos) {
+                    state.set_group_folded(*group_id, false);
+                } else {
+                    state.selected_features.clear();
+                    for &fid in features {
+                        state.selected_features.insert(fid);
+                    }
+                }
+            }
+            if resp.double_clicked() {
+                state.toggle_group_fold(*group_id);
+            }
+
+            // Rich hover tooltip
+            let mut tooltip_feats = Vec::new();
+            for &fid in features {
+                if let Some(f) = app.session.doc.feature(fid) {
+                    let step = dep_graph.id_to_index.get(&fid).copied().unwrap_or(0) + 1;
+                    let comp_name = component_names.get(&f.component).map(|s| s.as_str()).unwrap_or("Component");
+                    tooltip_feats.push((step, f.name.as_str(), comp_name));
+                }
+            }
+            let tip = Timeline2DState::format_group_tooltip(&grp_name, &tooltip_feats, is_active);
+            let resp = resp.on_hover_text(tip);
+
+            // Group Context Menu
+            let gid = *group_id;
+            let g_feats = features.clone();
+            Menu::context(&resp, |ui| {
+                if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_open_group"), "folder").clicked() {
+                    state.set_group_folded(gid, false);
+                    ui.close();
+                }
+                if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_delete_group_expand"), "folder").clicked() {
+                    let _ = app.run_heavy("timeline.ungroup", serde_json::json!({ "group": gid }));
+                    ui.close();
+                }
+                if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_delete_group_all"), "delete").clicked() {
+                    crate::timeline::delete_features(app, g_feats);
+                    let _ = app.run_heavy("timeline.ungroup", serde_json::json!({ "group": gid }));
+                    ui.close();
+                }
+            });
+
+            paint_virtual_group_chip(&painter, card_rect, &grp_name, features.len(), is_active, is_group_selected, &t);
+        }
+    }
 
     // 10. Paint Pinned Left Headers & Transport Controls
     paint_pinned_left(
@@ -646,7 +669,7 @@ fn paint_two_tier_header(
 
                 let available_right = banner_rect.width() - (title_w + 16.0);
                 let right_pos = pos2(banner_rect.right() - 6.0, banner_rect.center().y);
-                if available_right > 45.0 {
+                if available_right > 55.0 {
                     p.text(right_pos, egui::Align2::RIGHT_CENTER, "Close ▴", FontId::proportional(9.0), text_color);
                 } else if available_right > 15.0 {
                     p.text(right_pos, egui::Align2::RIGHT_CENTER, "▴", FontId::proportional(9.0), text_color);
@@ -813,19 +836,41 @@ fn paint_virtual_group_chip(
     p.rect_filled(rect, 5.0, bg_color);
     p.rect_stroke(rect, 5.0, Stroke::new(if is_selected { 1.5 } else { 1.0 }, border_color), StrokeKind::Inside);
 
-    // Integrated header cap (expansion chevron indicator)
-    let header_cap_rect = Rect::from_min_size(rect.left_top(), vec2(rect.width(), HEADER_T2_HEIGHT));
-    p.rect_filled(header_cap_rect, 4.0, if is_active { t.accent.gamma_multiply(0.25) } else { t.text_dim.gamma_multiply(0.2) });
+    // Integrated header cap (folder icon + expansion chevron indicator)
+    let header_cap_rect = Rect::from_min_size(rect.left_top(), vec2(rect.width(), HEADER_T2_HEIGHT - 2.0));
+    let cap_bg = if is_active {
+        t.accent.gamma_multiply(0.25)
+    } else {
+        t.text_dim.gamma_multiply(0.2)
+    };
+    let cap_stroke = if is_active {
+        t.accent.gamma_multiply(0.5)
+    } else {
+        t.border
+    };
+    let cap_rounding = egui::CornerRadius { nw: 4, ne: 4, sw: 2, se: 2 };
+    p.rect_filled(header_cap_rect, cap_rounding, cap_bg);
+    p.rect_stroke(header_cap_rect, cap_rounding, Stroke::new(1.0, cap_stroke), StrokeKind::Inside);
+
+    // Folder icon
+    let folder_rect = Rect::from_center_size(pos2(header_cap_rect.left() + 11.0, header_cap_rect.center().y), vec2(13.0, 13.0));
+    if is_active {
+        crate::icons::paint_icon(p, folder_rect, "folder", 1.0);
+    } else {
+        crate::icons::paint_ink(p, folder_rect, "folder", t.text_dim);
+    }
+
+    // Expansion chevron indicator ▶
     p.text(
-        header_cap_rect.center(),
+        pos2(header_cap_rect.right() - 8.0, header_cap_rect.center().y),
         egui::Align2::CENTER_CENTER,
         "▶",
-        FontId::proportional(9.0),
+        FontId::proportional(8.0),
         if is_active { t.accent } else { t.text_dim },
     );
 
     // Count badge
-    let badge_rect = Rect::from_center_size(pos2(rect.center().x, rect.top() + 38.0), vec2(18.0, 14.0));
+    let badge_rect = Rect::from_center_size(pos2(rect.center().x, rect.top() + HEADER_T2_HEIGHT + 14.0), vec2(18.0, 14.0));
     p.rect_filled(badge_rect, 3.0, if is_active { t.accent.gamma_multiply(0.2) } else { t.text_dim.gamma_multiply(0.15) });
     p.text(
         badge_rect.center(),
@@ -836,7 +881,7 @@ fn paint_virtual_group_chip(
     );
 
     // Vertical 90-degree rotated title text
-    let title_pos = pos2(rect.center().x, rect.top() + 60.0);
+    let title_pos = pos2(rect.center().x, rect.top() + HEADER_T2_HEIGHT + 30.0);
     let title_color = if is_active { t.text } else { t.text_dim };
     let mut shape = egui::epaint::TextShape::new(
         title_pos,
