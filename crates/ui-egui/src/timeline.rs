@@ -789,6 +789,21 @@ fn folder_tile(app: &mut SolveApp, ui: &mut egui::Ui, p: &egui::Painter, x: f32,
             app.tree.collapsed.remove(&key);
         }
     }
+    crate::ui_kit::Menu::context(&resp, |ui| {
+        if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_rename_group"), "rename").clicked() {
+            app.dialog = Some(crate::dialogs::Dialog::rename_group(group.id, &group.name));
+            ui.close();
+        }
+        if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_delete_group_expand"), "folder").clicked() {
+            let _ = app.run_heavy("timeline.ungroup", serde_json::json!({ "group": group.id }));
+            ui.close();
+        }
+        if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_delete_group_all"), "delete").clicked() {
+            crate::timeline::delete_features(app, group.features.clone());
+            let _ = app.run_heavy("timeline.ungroup", serde_json::json!({ "group": group.id }));
+            ui.close();
+        }
+    });
     resp.on_hover_text(format!("{} ({count})", group.name));
     x + 32.0
 }

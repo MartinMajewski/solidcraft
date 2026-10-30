@@ -448,9 +448,14 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
             // Group Context Menu
             let gid = *group_id;
             let g_feats = features.clone();
+            let g_name = grp_name.clone();
             Menu::context(&resp, |ui| {
                 if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_open_group"), "folder").clicked() {
                     state.set_group_folded(gid, false);
+                    ui.close();
+                }
+                if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_rename_group"), "rename").clicked() {
+                    app.dialog = Some(crate::dialogs::Dialog::rename_group(gid, &g_name));
                     ui.close();
                 }
                 if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_delete_group_expand"), "folder").clicked() {
@@ -684,8 +689,46 @@ fn paint_two_tier_header(
                 if resp.clicked() {
                     state.set_group_folded(grp_id, true);
                 }
-                let grp_name = app.session.doc.timeline_groups.iter().find(|g| g.id == grp_id).map(|g| g.name.as_str()).unwrap_or("Group");
-                resp.on_hover_text(format!("Click to fold {}", grp_name));
+                let grp_name = app
+                    .session
+                    .doc
+                    .timeline_groups
+                    .iter()
+                    .find(|g| g.id == grp_id)
+                    .map(|g| g.name.clone())
+                    .unwrap_or_else(|| "Group".to_string());
+                let g_feats = app
+                    .session
+                    .doc
+                    .timeline_groups
+                    .iter()
+                    .find(|g| g.id == grp_id)
+                    .map(|g| g.features.clone())
+                    .unwrap_or_default();
+
+                let resp = resp.on_hover_text(format!("Click to fold {}", grp_name));
+
+                let gid = grp_id;
+                let g_name = grp_name.clone();
+                Menu::context(&resp, |ui| {
+                    if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_close_group"), "folder").clicked() {
+                        state.set_group_folded(gid, true);
+                        ui.close();
+                    }
+                    if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_rename_group"), "rename").clicked() {
+                        app.dialog = Some(crate::dialogs::Dialog::rename_group(gid, &g_name));
+                        ui.close();
+                    }
+                    if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_delete_group_expand"), "folder").clicked() {
+                        let _ = app.run_heavy("timeline.ungroup", serde_json::json!({ "group": gid }));
+                        ui.close();
+                    }
+                    if crate::context_menu::button(ui, crate::i18n::tr("ui.timeline_2d_delete_group_all"), "delete").clicked() {
+                        crate::timeline::delete_features(app, g_feats);
+                        let _ = app.run_heavy("timeline.ungroup", serde_json::json!({ "group": gid }));
+                        ui.close();
+                    }
+                });
                 let pill_color = if is_active { t.accent.gamma_multiply(0.2) } else { t.text_dim.gamma_multiply(0.2) };
                 let stroke_color = if is_active { t.accent.gamma_multiply(0.45) } else { t.border };
                 let text_color = if is_active { t.accent } else { t.text_dim };

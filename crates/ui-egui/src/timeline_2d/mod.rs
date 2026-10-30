@@ -177,4 +177,41 @@ mod tests {
         let new_docked = crate::scenario::rect_of("history:strip").unwrap();
         assert!(new_docked.height() > docked_h + 25.0);
     }
+
+    #[test]
+    fn test_rename_group_dialog() {
+        let mut h = Harness::new();
+        h.app.run("solid.box", json!({"length": 20, "width": 20, "height": 10})).unwrap();
+        h.app.run("solid.box", json!({"length": 20, "width": 20, "height": 10, "corner": [30, 0, 0]})).unwrap();
+        let f0 = h.app.session.doc.features[0].id;
+        let f1 = h.app.session.doc.features[1].id;
+
+        let res = h.app.run_heavy("timeline.group", json!({
+            "name": "Group 1",
+            "features": [f0, f1],
+        })).unwrap();
+        let gid = res["group"].as_u64().unwrap();
+
+        let mut d = crate::dialogs::Dialog::rename_group(gid, "Group 1");
+        assert_eq!(crate::dialogs::report_title(&d), "RENAME GROUP");
+
+        if let crate::dialogs::Kind::RenameGroup { name, .. } = &mut d.kind {
+            *name = "Custom Assembly".to_string();
+        }
+        let cmds = crate::dialogs::apply_commands(&h.app, &d).unwrap();
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0].0, "timeline.rename_group");
+        assert_eq!(cmds[0].1["group"], gid);
+        assert_eq!(cmds[0].1["name"], "Custom Assembly");
+
+        h.app.dialog = Some(d);
+        h.frames(2);
+        h.step(&json!({"click": {"handle": "dialog:ok"}})).unwrap();
+        h.frames(2);
+
+        assert_eq!(
+            h.app.session.doc.timeline_groups.iter().find(|g| g.id == gid).map(|g| g.name.as_str()),
+            Some("Custom Assembly")
+        );
+    }
 }

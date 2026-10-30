@@ -9,6 +9,7 @@
     "ui.timeline_2d_delete_group_expand": "حذف المجموعة مع الإبقاء على المحتوى",
     "ui.timeline_2d_group_selection": "تجميع التحديد ({count} إجراءات)",
     "ui.timeline_2d_open_group": "فتح المجموعة",
+    "ui.timeline_2d_rename_group": "إعادة تسمية المجموعة",
     "ui.timeline_2d_transport_title": "التحكم في المخطط الزمني"
   },
   "de": {
@@ -21,6 +22,7 @@
     "ui.timeline_2d_delete_group_expand": "Gruppe auflösen (Inhalt behalten)",
     "ui.timeline_2d_group_selection": "Auswahl gruppieren ({count} Aktionen)",
     "ui.timeline_2d_open_group": "Gruppe öffnen",
+    "ui.timeline_2d_rename_group": "Gruppe umbenennen",
     "ui.timeline_2d_transport_title": "VERLAUFS-STEUERUNG"
   },
   "en": {
@@ -33,6 +35,7 @@
     "ui.timeline_2d_delete_group_expand": "Delete Group but expand content",
     "ui.timeline_2d_group_selection": "Group Selection ({count} Actions)",
     "ui.timeline_2d_open_group": "Open Group",
+    "ui.timeline_2d_rename_group": "Rename Group",
     "ui.timeline_2d_transport_title": "TIMELINE TRANSPORT"
   },
   "he": {
@@ -45,6 +48,7 @@
     "ui.timeline_2d_delete_group_expand": "מחק קבוצה והרחב תוכן",
     "ui.timeline_2d_group_selection": "קבץ בחירה ({count} פעולות)",
     "ui.timeline_2d_open_group": "פתח קבוצה",
+    "ui.timeline_2d_rename_group": "שנה שם קבוצה",
     "ui.timeline_2d_transport_title": "בקרת ציר זמן"
   },
   "ja": {
@@ -57,6 +61,7 @@
     "ui.timeline_2d_delete_group_expand": "グループを解除して内容を展開",
     "ui.timeline_2d_group_selection": "選択をグループ化 ({count}件のアクション)",
     "ui.timeline_2d_open_group": "グループを展開",
+    "ui.timeline_2d_rename_group": "グループの名前を変更",
     "ui.timeline_2d_transport_title": "タイムライン操作"
   },
   "ko": {
@@ -69,6 +74,7 @@
     "ui.timeline_2d_delete_group_expand": "그룹 해제 (내용 유지)",
     "ui.timeline_2d_group_selection": "선택 항목 그룹화 ({count}개 작업)",
     "ui.timeline_2d_open_group": "그룹 열기",
+    "ui.timeline_2d_rename_group": "그룹 이름 바꾸기",
     "ui.timeline_2d_transport_title": "타임라인 제어"
   },
   "vi": {
@@ -81,6 +87,7 @@
     "ui.timeline_2d_delete_group_expand": "Xóa nhóm nhưng giữ nội dung",
     "ui.timeline_2d_group_selection": "Nhóm lựa chọn ({count} hành động)",
     "ui.timeline_2d_open_group": "Mở nhóm",
+    "ui.timeline_2d_rename_group": "Đổi tên nhóm",
     "ui.timeline_2d_transport_title": "ĐIỀU KHIỂN DÒNG THỜI GIAN"
   },
   "zh": {
@@ -93,6 +100,7 @@
     "ui.timeline_2d_delete_group_expand": "解散组并保留内容",
     "ui.timeline_2d_group_selection": "组合所选项 ({count} 个操作)",
     "ui.timeline_2d_open_group": "展开组",
+    "ui.timeline_2d_rename_group": "重命名组",
     "ui.timeline_2d_transport_title": "时间轴控制"
   }
 }
