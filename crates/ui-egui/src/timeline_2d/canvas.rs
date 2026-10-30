@@ -162,18 +162,37 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
 
     // 7. Calculate Active Selection and Movable Corridor
     let selected_id = state.selected_features.iter().next().copied();
-    let corridor = selected_id.and_then(|id| dep_graph.corridor_for(id));
+    let corridor = if state.selected_features.len() == 1 {
+        selected_id.and_then(|id| dep_graph.corridor_for(id))
+    } else if !state.selected_features.is_empty() {
+        let ids: Vec<u64> = state.selected_features.iter().copied().collect();
+        dep_graph.corridor_for_selection(&ids)
+    } else {
+        None
+    };
 
     // Draw movable corridor background and brackets if selected
-    if let (Some(_sel_id), Some(corr)) = (selected_id, corridor) {
+    if let Some(corr) = corridor {
+        let tracks_height = num_tracks.max(1) as f32 * ROW_HEIGHT;
+        let content_tracks_top = grid_rect.top() - state.scroll_y + state.overscroll_y;
+        let content_tracks_bottom = content_tracks_top + tracks_height;
+
+        let corridor_top = content_tracks_top.max(grid_rect.top());
+        let corridor_bottom = content_tracks_bottom.min(grid_rect.bottom());
+
+        let bracket_top = (content_tracks_top + 4.0).max(grid_rect.top() + 4.0);
+        let bracket_bottom = (content_tracks_bottom - 4.0).min(grid_rect.bottom() - 4.0);
+
         paint_movable_corridor(
             &grid_painter,
             &visual_columns,
             &dep_graph,
             grid_origin_x,
             state.scroll_x,
-            grid_rect.top(),
-            grid_rect.bottom(),
+            corridor_top,
+            corridor_bottom,
+            bracket_top,
+            bracket_bottom,
             corr,
             marker_slot,
             &t,
@@ -490,10 +509,10 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
         let line_bottom = total_rect.bottom() - 2.0;
 
         // Vertical marker line through Tier 2 and component tracks
-        painter.line_segment([pos2(marker_col_x, line_top), pos2(marker_col_x, line_bottom)], Stroke::new(2.0, accent.color));
+        painter.line_segment([pos2(marker_col_x, line_top), pos2(marker_col_x, line_bottom)], Stroke::new(2.5, accent.color));
 
         // Circular pin in Tier 1
-        painter.circle(pin_center, 5.0, t.timeline, Stroke::new(2.0, accent.color));
+        painter.circle(pin_center, 5.0, t.timeline, Stroke::new(2.5, accent.color));
         painter.circle_filled(pin_center, 1.5, accent.color);
     }
 
@@ -899,12 +918,18 @@ fn paint_movable_corridor(
     _dep_graph: &DependencyGraph,
     grid_origin_x: f32,
     scroll_x: f32,
-    grid_top: f32,
-    grid_bottom: f32,
+    corridor_top: f32,
+    corridor_bottom: f32,
+    bracket_top: f32,
+    bracket_bottom: f32,
     corr: MovableCorridor,
     marker_slot: usize,
     t: &Tokens,
 ) {
+    if corridor_bottom <= corridor_top || bracket_bottom <= bracket_top {
+        return;
+    }
+
     let min_col = corr.min_slot.min(columns.len().saturating_sub(1));
     let max_col = corr.max_slot.min(columns.len().saturating_sub(1));
 
@@ -916,44 +941,94 @@ fn paint_movable_corridor(
 
     match split {
         CorridorSplit::AllActive { .. } => {
-            let rect = Rect::from_min_max(pos2(x_start, grid_top), pos2(x_end, grid_bottom));
+            let rect = Rect::from_min_max(pos2(x_start, corridor_top), pos2(x_end, corridor_bottom));
             p.rect_filled(rect, 0.0, t.form_success.gamma_multiply(0.08));
-            paint_bracket_open(p, x_start, grid_top, grid_bottom, t.form_success);
-            paint_bracket_close(p, x_end, grid_top, grid_bottom, t.form_success);
+            if x_start >= grid_origin_x - 1.0 {
+                paint_bracket_open(p, x_start, grid_origin_x, bracket_top, bracket_bottom, t.form_success, Some(marker_x));
+            }
+            if x_end >= grid_origin_x {
+                paint_bracket_close(p, x_end, bracket_top, bracket_bottom, t.form_success, Some(marker_x));
+            }
         }
         CorridorSplit::AllInactive { .. } => {
-            let rect = Rect::from_min_max(pos2(x_start, grid_top), pos2(x_end, grid_bottom));
+            let rect = Rect::from_min_max(pos2(x_start, corridor_top), pos2(x_end, corridor_bottom));
             p.rect_filled(rect, 0.0, t.text_dim.gamma_multiply(0.08));
-            paint_bracket_open(p, x_start, grid_top, grid_bottom, t.text_dim);
-            paint_bracket_close(p, x_end, grid_top, grid_bottom, t.text_dim);
+            if x_start >= grid_origin_x - 1.0 {
+                paint_bracket_open(p, x_start, grid_origin_x, bracket_top, bracket_bottom, t.text_dim, Some(marker_x));
+            }
+            if x_end >= grid_origin_x {
+                paint_bracket_close(p, x_end, bracket_top, bracket_bottom, t.text_dim, Some(marker_x));
+            }
         }
         CorridorSplit::Spanning { .. } => {
             // Active segment (left of marker)
-            let active_rect = Rect::from_min_max(pos2(x_start, grid_top), pos2(marker_x, grid_bottom));
+            let active_rect = Rect::from_min_max(pos2(x_start, corridor_top), pos2(marker_x, corridor_bottom));
             p.rect_filled(active_rect, 0.0, t.form_success.gamma_multiply(0.08));
-            paint_bracket_open(p, x_start, grid_top, grid_bottom, t.form_success);
 
             // Inactive segment (right of marker)
-            let inactive_rect = Rect::from_min_max(pos2(marker_x, grid_top), pos2(x_end, grid_bottom));
+            let inactive_rect = Rect::from_min_max(pos2(marker_x, corridor_top), pos2(x_end, corridor_bottom));
             p.rect_filled(inactive_rect, 0.0, t.text_dim.gamma_multiply(0.08));
-            paint_bracket_close(p, x_end, grid_top, grid_bottom, t.text_dim);
+
+            if x_start >= grid_origin_x - 1.0 {
+                paint_bracket_open(p, x_start, grid_origin_x, bracket_top, bracket_bottom, t.form_success, Some(marker_x));
+            }
+            if x_end >= grid_origin_x {
+                paint_bracket_close(p, x_end, bracket_top, bracket_bottom, t.text_dim, Some(marker_x));
+            }
         }
     }
 }
 
-fn paint_bracket_open(p: &egui::Painter, x: f32, top: f32, bottom: f32, color: egui::Color32) {
-    let stroke = Stroke::new(2.5, color);
-    let tick_len = 10.0;
-    p.line_segment([pos2(x + tick_len, top), pos2(x, top)], stroke);
-    p.line_segment([pos2(x, top), pos2(x, bottom)], stroke);
-    p.line_segment([pos2(x, bottom), pos2(x + tick_len, bottom)], stroke);
+fn paint_bracket_open(
+    p: &egui::Painter,
+    x: f32,
+    grid_origin_x: f32,
+    top: f32,
+    bottom: f32,
+    color: egui::Color32,
+    marker_x: Option<f32>,
+) {
+    let stroke = Stroke::new(2.0, color);
+
+    // Inset from the pinned component layer's border seam if at the boundary
+    let (bx, tick_len) = if (x - grid_origin_x).abs() <= 1.0 {
+        (grid_origin_x + 1.5, 6.0)
+    } else {
+        (x, 7.0)
+    };
+
+    let covered_by_marker = marker_x.is_some_and(|mx| (bx - mx).abs() <= 1.5);
+
+    p.line_segment([pos2(bx + tick_len, top), pos2(bx, top)], stroke);
+    if !covered_by_marker {
+        p.line_segment(
+            [pos2(bx, top - stroke.width / 2.0), pos2(bx, bottom + stroke.width / 2.0)],
+            stroke,
+        );
+    }
+    p.line_segment([pos2(bx, bottom), pos2(bx + tick_len, bottom)], stroke);
 }
 
-fn paint_bracket_close(p: &egui::Painter, x: f32, top: f32, bottom: f32, color: egui::Color32) {
-    let stroke = Stroke::new(2.5, color);
-    let tick_len = 10.0;
+fn paint_bracket_close(
+    p: &egui::Painter,
+    x: f32,
+    top: f32,
+    bottom: f32,
+    color: egui::Color32,
+    marker_x: Option<f32>,
+) {
+    let stroke = Stroke::new(2.0, color);
+    let tick_len = 7.0;
+
+    let covered_by_marker = marker_x.is_some_and(|mx| (x - mx).abs() <= 1.5);
+
     p.line_segment([pos2(x - tick_len, top), pos2(x, top)], stroke);
-    p.line_segment([pos2(x, top), pos2(x, bottom)], stroke);
+    if !covered_by_marker {
+        p.line_segment(
+            [pos2(x, top - stroke.width / 2.0), pos2(x, bottom + stroke.width / 2.0)],
+            stroke,
+        );
+    }
     p.line_segment([pos2(x, bottom), pos2(x - tick_len, bottom)], stroke);
 }
 
