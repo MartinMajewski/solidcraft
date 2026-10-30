@@ -1,0 +1,98 @@
+{
+  "ar": {
+    "prefs.timeline_2d": "متصفح السجل ثنائي الأبعاد",
+    "prefs.timeline_2d_note": "عرض متصفح السجل ثنائي الأبعاد بتخطيط مكونات متعدد المسارات ورأس من مستويين وأقواس نطاق قابلة للتحريك وتجميع العناصر.",
+    "ui.timeline_2d_activate_group": "تفعيل المجموعة",
+    "ui.timeline_2d_close_group": "إغلاق المجموعة",
+    "ui.timeline_2d_deactivate_group": "تعطيل المجموعة",
+    "ui.timeline_2d_delete_group_all": "حذف المجموعة والمحتوى",
+    "ui.timeline_2d_delete_group_expand": "حذف المجموعة مع الإبقاء على المحتوى",
+    "ui.timeline_2d_group_selection": "تجميع التحديد ({count} إجراءات)",
+    "ui.timeline_2d_open_group": "فتح المجموعة",
+    "ui.timeline_2d_transport_title": "التحكم في المخطط الزمني"
+  },
+  "de": {
+    "prefs.timeline_2d": "2D-Verlauf-Browser",
+    "prefs.timeline_2d_note": "Zweidimensionalen Verlauf-Browser mit mehrspurigem Komponenten-Layout, zweistufiger Kopfzeile, beweglichen Korridorklammern und Elementgruppierung anzeigen.",
+    "ui.timeline_2d_activate_group": "Gruppe aktivieren",
+    "ui.timeline_2d_close_group": "Gruppe schließen",
+    "ui.timeline_2d_deactivate_group": "Gruppe deaktivieren",
+    "ui.timeline_2d_delete_group_all": "Gruppe und Inhalt löschen",
+    "ui.timeline_2d_delete_group_expand": "Gruppe auflösen (Inhalt behalten)",
+    "ui.timeline_2d_group_selection": "Auswahl gruppieren ({count} Aktionen)",
+    "ui.timeline_2d_open_group": "Gruppe öffnen",
+    "ui.timeline_2d_transport_title": "VERLAUFS-STEUERUNG"
+  },
+  "en": {
+    "prefs.timeline_2d": "2D History Browser",
+    "prefs.timeline_2d_note": "Show the two-dimensional History Browser with multi-track component layout, two-tier header, movable corridor brackets, and feature grouping.",
+    "ui.timeline_2d_activate_group": "Activate Group",
+    "ui.timeline_2d_close_group": "Close Group",
+    "ui.timeline_2d_deactivate_group": "Deactivate Group",
+    "ui.timeline_2d_delete_group_all": "Delete Group and content",
+    "ui.timeline_2d_delete_group_expand": "Delete Group but expand content",
+    "ui.timeline_2d_group_selection": "Group Selection ({count} Actions)",
+    "ui.timeline_2d_open_group": "Open Group",
+    "ui.timeline_2d_transport_title": "TIMELINE TRANSPORT"
+  },
+  "he": {
+    "prefs.timeline_2d": "דפדפן היסטוריה דו-ממדי",
+    "prefs.timeline_2d_note": "הצג את דפדפן ההיסטוריה הדו-ממדי עם פריסת רכיבים מרובת מסלולים, כותרת דו-שכבתית, סוגרי טווח ניתנים להזזה וקיבוץ פריטים.",
+    "ui.timeline_2d_activate_group": "הפעל קבוצה",
+    "ui.timeline_2d_close_group": "סגור קבוצה",
+    "ui.timeline_2d_deactivate_group": "השבת קבוצה",
+    "ui.timeline_2d_delete_group_all": "מחק קבוצה ותוכן",
+    "ui.timeline_2d_delete_group_expand": "מחק קבוצה והרחב תוכן",
+    "ui.timeline_2d_group_selection": "קבץ בחירה ({count} פעולות)",
+    "ui.timeline_2d_open_group": "פתח קבוצה",
+    "ui.timeline_2d_transport_title": "בקרת ציר זמן"
+  },
+  "ja": {
+    "prefs.timeline_2d": "2D履歴ブラウザ",
+    "prefs.timeline_2d_note": "マルチトラックのコンポーネント配置、2段ヘッダー、移動可能範囲ブラケット、フィーチャーのグループ化を備えた2D履歴ブラウザを表示します。",
+    "ui.timeline_2d_activate_group": "グループを有効化",
+    "ui.timeline_2d_close_group": "グループを折りたたむ",
+    "ui.timeline_2d_deactivate_group": "グループを無効化",
+    "ui.timeline_2d_delete_group_all": "グループと内容を削除",
+    "ui.timeline_2d_delete_group_expand": "グループを解除して内容を展開",
+    "ui.timeline_2d_group_selection": "選択をグループ化 ({count}件のアクション)",
+    "ui.timeline_2d_open_group": "グループを展開",
+    "ui.timeline_2d_transport_title": "タイムライン操作"
+  },
+  "ko": {
+    "prefs.timeline_2d": "2D 히스토리 브라우저",
+    "prefs.timeline_2d_note": "멀티 트랙 구성요소 배치, 2단 헤더, 이동 가능 범위 브래킷 및 피처 그룹화가 적용된 2D 히스토리 브라우저를 표시합니다.",
+    "ui.timeline_2d_activate_group": "그룹 활성화",
+    "ui.timeline_2d_close_group": "그룹 닫기",
+    "ui.timeline_2d_deactivate_group": "그룹 비활성화",
+    "ui.timeline_2d_delete_group_all": "그룹 및 내용 삭제",
+    "ui.timeline_2d_delete_group_expand": "그룹 해제 (내용 유지)",
+    "ui.timeline_2d_group_selection": "선택 항목 그룹화 ({count}개 작업)",
+    "ui.timeline_2d_open_group": "그룹 열기",
+    "ui.timeline_2d_transport_title": "타임라인 제어"
+  },
+  "vi": {
+    "prefs.timeline_2d": "Trình duyệt lịch sử 2D",
+    "prefs.timeline_2d_note": "Hiển thị trình duyệt lịch sử 2D với bố cục thành phần nhiều rãnh, tiêu đề hai tầng, dấu ngoặc phạm vi di chuyển và nhóm tính năng.",
+    "ui.timeline_2d_activate_group": "Kích hoạt nhóm",
+    "ui.timeline_2d_close_group": "Đóng nhóm",
+    "ui.timeline_2d_deactivate_group": "Vô hiệu hóa nhóm",
+    "ui.timeline_2d_delete_group_all": "Xóa nhóm và nội dung",
+    "ui.timeline_2d_delete_group_expand": "Xóa nhóm nhưng giữ nội dung",
+    "ui.timeline_2d_group_selection": "Nhóm lựa chọn ({count} hành động)",
+    "ui.timeline_2d_open_group": "Mở nhóm",
+    "ui.timeline_2d_transport_title": "ĐIỀU KHIỂN DÒNG THỜI GIAN"
+  },
+  "zh": {
+    "prefs.timeline_2d": "二维历史记录浏览器",
+    "prefs.timeline_2d_note": "显示带有多轨组件布局、双层表头、可移动范围括号以及特征分组的二维历史记录浏览器。",
+    "ui.timeline_2d_activate_group": "启用组",
+    "ui.timeline_2d_close_group": "折叠组",
+    "ui.timeline_2d_deactivate_group": "停用组",
+    "ui.timeline_2d_delete_group_all": "删除组及内容",
+    "ui.timeline_2d_delete_group_expand": "解散组并保留内容",
+    "ui.timeline_2d_group_selection": "组合所选项 ({count} 个操作)",
+    "ui.timeline_2d_open_group": "展开组",
+    "ui.timeline_2d_transport_title": "时间轴控制"
+  }
+}

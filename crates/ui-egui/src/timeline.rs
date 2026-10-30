@@ -651,6 +651,10 @@ pub(crate) fn tick_playback(app: &mut SolveApp, ctx: &egui::Context) {
 }
 
 pub fn timeline(app: &mut SolveApp, ui: &mut egui::Ui) {
+    if app.preferences.timeline_2d {
+        crate::timeline_2d::timeline(app, ui);
+        return;
+    }
     let t = Tokens::get();
     app.shell.history_dock_space = Some(ui.available_rect_before_wrap());
     if Container::for_layout(app.ui.layout, Surface::Panel).floating() {

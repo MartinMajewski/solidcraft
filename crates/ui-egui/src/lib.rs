@@ -288,6 +288,7 @@ pub mod theme_files;
 #[cfg(test)]
 mod thin_extrude_tests;
 pub mod timeline;
+pub mod timeline_2d;
 pub mod timeline_left;
 pub mod titlebar;
 pub mod tool_cursor;
@@ -2775,7 +2776,13 @@ impl SolveApp {
                 // A dialog in the left column holds the History's place.
                 (!dialog_column::holds(self)).then(|| timeline_left::floating_rect(self, below_ribbon))
             } else {
-                show_timeline.then(|| timeline::floating_rect(full))
+                show_timeline.then(|| {
+                    if self.preferences.timeline_2d {
+                        timeline_2d::floating_rect(full)
+                    } else {
+                        timeline::floating_rect(full)
+                    }
+                })
             };
             // Draw the scene first, then let the unchanged panel layouts cover it. The
             // viewport keeps its full projection even underneath the browser and cards.
