@@ -8,7 +8,7 @@ use solidcraft_engine::doc::{Document, Feature};
 use crate::SolveApp;
 use crate::theme::Tokens;
 use crate::ui_kit::{HistoryTransport, Menu};
-use super::deps::{CorridorSplit, DependencyGraph, MovableCorridor};
+use super::deps::DependencyGraph;
 use super::state::Timeline2DState;
 
 pub const HEADER_T1_HEIGHT: f32 = 24.0;
@@ -99,6 +99,18 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
     let visual_columns = build_visual_columns(&app.session.doc, &state.folded_groups);
     let num_columns = visual_columns.len();
 
+    // Map marker feature slot to its visual column boundary
+    let marker_visual_col = if let Some(marker_idx) = app.session.doc.marker {
+        if marker_idx < total_features {
+            let f = &app.session.doc.features[marker_idx];
+            feature_to_visual_col(&visual_columns, f.id).unwrap_or(num_columns)
+        } else {
+            num_columns
+        }
+    } else {
+        num_columns
+    };
+
     // 4. Compute layout dimensions
     let content_width = num_columns as f32 * COL_WIDTH;
     let grid_origin_x = total_rect.left() + PINNED_LEFT_WIDTH;
@@ -160,19 +172,12 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
         }
     }
 
-    // 7. Calculate Active Selection and Movable Corridor
+    // 7. Calculate Active Selection and Movable Corridor in Visual Columns
     let selected_id = state.selected_features.iter().next().copied();
-    let corridor = if state.selected_features.len() == 1 {
-        selected_id.and_then(|id| dep_graph.corridor_for(id))
-    } else if !state.selected_features.is_empty() {
-        let ids: Vec<u64> = state.selected_features.iter().copied().collect();
-        dep_graph.corridor_for_selection(&ids)
-    } else {
-        None
-    };
+    let visual_corridor = compute_visual_corridor(&visual_columns, &dep_graph, &state.selected_features);
 
     // Draw movable corridor background and brackets if selected
-    if let Some(corr) = corridor {
+    if let Some((min_col, max_col)) = visual_corridor {
         let tracks_height = num_tracks.max(1) as f32 * ROW_HEIGHT;
         let content_tracks_top = grid_rect.top() - state.scroll_y + state.overscroll_y;
         let content_tracks_bottom = content_tracks_top + tracks_height;
@@ -185,16 +190,15 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
 
         paint_movable_corridor(
             &grid_painter,
-            &visual_columns,
-            &dep_graph,
             grid_origin_x,
             state.scroll_x,
             corridor_top,
             corridor_bottom,
             bracket_top,
             bracket_bottom,
-            corr,
-            marker_slot,
+            min_col,
+            max_col,
+            marker_visual_col,
             &t,
         );
     }
@@ -210,7 +214,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
         }
 
         match col {
-            VisualColumn::Features { step_number, features, open_group } => {
+            VisualColumn::Features { features, open_group, .. } => {
                 // If open group, draw subtle corridor tint in Tier 2
                 if let Some(_grp_id) = open_group {
                     let banner_rect = Rect::from_min_size(
@@ -236,7 +240,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                     }
                     if min_y < max_y && min_y < grid_rect.bottom() && max_y > grid_rect.top() {
                         let cx = col_x + COL_WIDTH / 2.0;
-                        let line_color = if *step_number <= marker_slot {
+                        let line_color = if col_idx < marker_visual_col {
                             accent.color
                         } else {
                             t.text_dim
@@ -256,8 +260,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                             continue;
                         }
 
-                        let f_slot = dep_graph.id_to_index.get(&fid).copied().unwrap_or(0);
-                        let is_active = f_slot < marker_slot;
+                        let is_active = col_idx < marker_visual_col;
                         let is_selected = state.is_selected(fid);
                         let is_prereq = selected_id.is_some_and(|sel| dep_graph.is_prerequisite(sel, fid));
                         let is_dependent = selected_id.is_some_and(|sel| dep_graph.is_dependent(sel, fid));
@@ -273,7 +276,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                         let warn = res.and_then(|r| r.warning.as_deref());
                         let mut tip = crate::timeline::status_text(&f.name, f.kind.type_name(), err, warn);
                         if !is_active {
-                            let steps_after = f_slot.saturating_sub(marker_slot) + 1;
+                            let steps_after = col_idx.saturating_sub(marker_visual_col) + 1;
                             tip.push_str(&format!("\nInactive (rolled back, {} step(s) after marker)", steps_after));
                         }
                         let resp = resp.on_hover_text(tip);
@@ -372,7 +375,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
         grid_origin_x,
         state.scroll_x,
         &visual_columns,
-        marker_slot,
+        marker_visual_col,
         accent,
         &t,
         &mut state,
@@ -394,8 +397,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                 vec2(CHIP_WIDTH, card_height),
             );
 
-            let first_slot = features.first().and_then(|id| dep_graph.id_to_index.get(id)).copied().unwrap_or(0);
-            let is_active = first_slot < marker_slot;
+            let is_active = col_idx < marker_visual_col;
             let is_group_selected = features.iter().any(|id| state.is_selected(*id));
 
             let grp_name = app
@@ -482,7 +484,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
     );
 
     // 11. Paint Extended Rollback Marker
-    let marker_col_x = grid_origin_x + marker_slot.min(num_columns) as f32 * COL_WIDTH - state.scroll_x;
+    let marker_col_x = grid_origin_x + marker_visual_col.min(num_columns) as f32 * COL_WIDTH - state.scroll_x;
     if marker_col_x >= grid_origin_x - 10.0 && marker_col_x <= total_rect.right() + 10.0 {
         let resp = ui.interact(
             Rect::from_min_size(pos2(marker_col_x - 8.0, total_rect.top() + 4.0), vec2(16.0, HEADER_T1_HEIGHT - 4.0)),
@@ -492,15 +494,26 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
         if resp.dragged()
             && let Some(pos) = pointer_pos
         {
-            let target_slot = ((pos.x - grid_origin_x + state.scroll_x) / COL_WIDTH).round().max(0.0) as usize;
-            let target_slot = target_slot.min(total_features);
-            if target_slot != marker_slot {
-                let params = if target_slot < total_features {
-                    serde_json::json!({ "position": target_slot })
+            let target_visual_col = ((pos.x - grid_origin_x + state.scroll_x) / COL_WIDTH).round().max(0.0) as usize;
+            let target_visual_col = target_visual_col.min(num_columns);
+            if target_visual_col != marker_visual_col {
+                let target_slot = if target_visual_col < num_columns {
+                    visual_columns[target_visual_col]
+                        .feature_ids()
+                        .first()
+                        .and_then(|&fid| dep_graph.id_to_index.get(&fid).copied())
+                        .unwrap_or(total_features)
                 } else {
-                    serde_json::json!({})
+                    total_features
                 };
-                let _ = app.run_heavy("timeline.roll_to", params);
+                if target_slot != marker_slot {
+                    let params = if target_slot < total_features {
+                        serde_json::json!({ "position": target_slot })
+                    } else {
+                        serde_json::json!({})
+                    };
+                    let _ = app.run_heavy("timeline.roll_to", params);
+                }
             }
         }
 
@@ -577,7 +590,7 @@ fn paint_two_tier_header(
     grid_origin_x: f32,
     scroll_x: f32,
     columns: &[VisualColumn],
-    marker_slot: usize,
+    marker_visual_col: usize,
     _accent: crate::theme::TabAccent,
     t: &Tokens,
     state: &mut Timeline2DState,
@@ -617,7 +630,7 @@ fn paint_two_tier_header(
 
         match col {
             VisualColumn::Features { step_number, .. } => {
-                let is_active = *step_number <= marker_slot;
+                let is_active = col_idx < marker_visual_col;
                 let text_color = if is_active { t.text } else { t.text_dim };
 
                 // Tier 1: Step number
@@ -630,13 +643,14 @@ fn paint_two_tier_header(
                 );
             }
             VisualColumn::FoldedGroup { .. } => {
+                let is_active = col_idx < marker_visual_col;
                 // Tier 1: Dash (-) in group column
                 p.text(
                     pos2(notch_x, total_rect.top() + 14.0),
                     egui::Align2::CENTER_CENTER,
                     "-",
                     mono_font.clone(),
-                    t.text_dim,
+                    if is_active { t.text } else { t.text_dim },
                 );
             }
         }
@@ -645,9 +659,9 @@ fn paint_two_tier_header(
     // Tier 2: Open group banners spanning contiguous member columns
     let mut i = 0;
     while i < columns.len() {
-        if let VisualColumn::Features { open_group: Some(grp_id), step_number, .. } = columns[i] {
+        if let VisualColumn::Features { open_group: Some(grp_id), .. } = columns[i] {
             let start_col = i;
-            let is_active = step_number <= marker_slot;
+            let is_active = start_col < marker_visual_col;
             while i + 1 < columns.len() {
                 if let VisualColumn::Features { open_group: Some(next_gid), .. } = columns[i + 1]
                     && next_gid == grp_id
@@ -670,6 +684,8 @@ fn paint_two_tier_header(
                 if resp.clicked() {
                     state.set_group_folded(grp_id, true);
                 }
+                let grp_name = app.session.doc.timeline_groups.iter().find(|g| g.id == grp_id).map(|g| g.name.as_str()).unwrap_or("Group");
+                resp.on_hover_text(format!("Click to fold {}", grp_name));
                 let pill_color = if is_active { t.accent.gamma_multiply(0.2) } else { t.text_dim.gamma_multiply(0.2) };
                 let stroke_color = if is_active { t.accent.gamma_multiply(0.45) } else { t.border };
                 let text_color = if is_active { t.accent } else { t.text_dim };
@@ -677,20 +693,26 @@ fn paint_two_tier_header(
                 p.rect_filled(banner_rect, 4.0, pill_color);
                 p.rect_stroke(banner_rect, 4.0, Stroke::new(1.0, stroke_color), StrokeKind::Inside);
 
-                let grp_name = app.session.doc.timeline_groups.iter().find(|g| g.id == grp_id).map(|g| g.name.as_str()).unwrap_or("Group");
                 let member_count = end_col - start_col + 1;
-                let title_text = format!("📁 {} ({})", grp_name, member_count);
 
+                // Folder icon
+                let icon_rect = Rect::from_center_size(pos2(banner_rect.left() + 10.0, banner_rect.center().y), vec2(11.0, 11.0));
+                if is_active {
+                    crate::icons::paint_icon(p, icon_rect, "folder", 1.0);
+                } else {
+                    crate::icons::paint_ink(p, icon_rect, "folder", t.text_dim);
+                }
+
+                let title_text = format!("{} ({})", grp_name, member_count);
                 let galley = p.layout_no_wrap(title_text, FontId::proportional(10.0), text_color);
-                let title_w = galley.size().x;
-                let left_pos = pos2(banner_rect.left() + 6.0, banner_rect.center().y);
-                p.galley(pos2(left_pos.x, left_pos.y - galley.size().y / 2.0), galley, text_color);
+                let title_pos = pos2(banner_rect.left() + 18.0, banner_rect.center().y - galley.size().y / 2.0);
+                p.galley(title_pos, galley, text_color);
 
-                let available_right = banner_rect.width() - (title_w + 16.0);
+                let pill_w = banner_rect.width();
                 let right_pos = pos2(banner_rect.right() - 6.0, banner_rect.center().y);
-                if available_right > 55.0 {
+                if pill_w >= 130.0 {
                     p.text(right_pos, egui::Align2::RIGHT_CENTER, "Close ▴", FontId::proportional(9.0), text_color);
-                } else if available_right > 15.0 {
+                } else if pill_w >= 85.0 {
                     p.text(right_pos, egui::Align2::RIGHT_CENTER, "▴", FontId::proportional(9.0), text_color);
                 }
             }
@@ -911,70 +933,116 @@ fn paint_virtual_group_chip(
     p.add(shape);
 }
 
+/// Helper: maps a feature ID to its visual column index on the 2D timeline grid.
+fn feature_to_visual_col(columns: &[VisualColumn], fid: u64) -> Option<usize> {
+    for (idx, col) in columns.iter().enumerate() {
+        if col.feature_ids().contains(&fid) {
+            return Some(idx);
+        }
+    }
+    None
+}
+
+/// Helper: computes the visual corridor `(min_col, max_col)` in visual column indices
+/// for the currently selected feature(s), taking into account folded groups.
+fn compute_visual_corridor(
+    columns: &[VisualColumn],
+    dep_graph: &DependencyGraph,
+    selected_features: &BTreeSet<u64>,
+) -> Option<(usize, usize)> {
+    if selected_features.is_empty() {
+        return None;
+    }
+
+    let selected_vec: Vec<u64> = selected_features.iter().copied().collect();
+    let min_curr = selected_vec
+        .iter()
+        .filter_map(|&id| feature_to_visual_col(columns, id))
+        .min()?;
+    let max_curr = selected_vec
+        .iter()
+        .filter_map(|&id| feature_to_visual_col(columns, id))
+        .max()?;
+
+    let max_prereq_col = selected_vec
+        .iter()
+        .filter_map(|id| dep_graph.all_prereqs.get(id))
+        .flatten()
+        .filter(|p| !selected_features.contains(p))
+        .filter_map(|&p| feature_to_visual_col(columns, p))
+        .max();
+
+    let min_dependent_col = selected_vec
+        .iter()
+        .filter_map(|id| dep_graph.all_dependents.get(id))
+        .flatten()
+        .filter(|d| !selected_features.contains(d))
+        .filter_map(|&d| feature_to_visual_col(columns, d))
+        .min();
+
+    let min_col = max_prereq_col.map(|c| c + 1).unwrap_or(0).min(min_curr);
+    let max_col = min_dependent_col
+        .map(|c| c.saturating_sub(1))
+        .unwrap_or(columns.len().saturating_sub(1))
+        .max(max_curr);
+
+    Some((min_col, max_col))
+}
+
 /// Helper: paints the movable corridor background tint and brackets [ ... ].
 fn paint_movable_corridor(
     p: &egui::Painter,
-    columns: &[VisualColumn],
-    _dep_graph: &DependencyGraph,
     grid_origin_x: f32,
     scroll_x: f32,
     corridor_top: f32,
     corridor_bottom: f32,
     bracket_top: f32,
     bracket_bottom: f32,
-    corr: MovableCorridor,
-    marker_slot: usize,
+    min_col: usize,
+    max_col: usize,
+    marker_visual_col: usize,
     t: &Tokens,
 ) {
     if corridor_bottom <= corridor_top || bracket_bottom <= bracket_top {
         return;
     }
 
-    let min_col = corr.min_slot.min(columns.len().saturating_sub(1));
-    let max_col = corr.max_slot.min(columns.len().saturating_sub(1));
-
     let x_start = grid_origin_x + min_col as f32 * COL_WIDTH - scroll_x;
     let x_end = grid_origin_x + (max_col + 1) as f32 * COL_WIDTH - scroll_x;
-    let marker_x = grid_origin_x + marker_slot.min(columns.len()) as f32 * COL_WIDTH - scroll_x;
+    let marker_x = grid_origin_x + marker_visual_col as f32 * COL_WIDTH - scroll_x;
 
-    let split = corr.split_at_marker(marker_slot);
-
-    match split {
-        CorridorSplit::AllActive { .. } => {
-            let rect = Rect::from_min_max(pos2(x_start, corridor_top), pos2(x_end, corridor_bottom));
-            p.rect_filled(rect, 0.0, t.form_success.gamma_multiply(0.08));
-            if x_start >= grid_origin_x - 1.0 {
-                paint_bracket_open(p, x_start, grid_origin_x, bracket_top, bracket_bottom, t.form_success, Some(marker_x));
-            }
-            if x_end >= grid_origin_x {
-                paint_bracket_close(p, x_end, bracket_top, bracket_bottom, t.form_success, Some(marker_x));
-            }
+    if max_col < marker_visual_col {
+        let rect = Rect::from_min_max(pos2(x_start, corridor_top), pos2(x_end, corridor_bottom));
+        p.rect_filled(rect, 0.0, t.form_success.gamma_multiply(0.08));
+        if x_start >= grid_origin_x - 1.0 {
+            paint_bracket_open(p, x_start, grid_origin_x, bracket_top, bracket_bottom, t.form_success, Some(marker_x));
         }
-        CorridorSplit::AllInactive { .. } => {
-            let rect = Rect::from_min_max(pos2(x_start, corridor_top), pos2(x_end, corridor_bottom));
-            p.rect_filled(rect, 0.0, t.text_dim.gamma_multiply(0.08));
-            if x_start >= grid_origin_x - 1.0 {
-                paint_bracket_open(p, x_start, grid_origin_x, bracket_top, bracket_bottom, t.text_dim, Some(marker_x));
-            }
-            if x_end >= grid_origin_x {
-                paint_bracket_close(p, x_end, bracket_top, bracket_bottom, t.text_dim, Some(marker_x));
-            }
+        if x_end >= grid_origin_x {
+            paint_bracket_close(p, x_end, bracket_top, bracket_bottom, t.form_success, Some(marker_x));
         }
-        CorridorSplit::Spanning { .. } => {
-            // Active segment (left of marker)
-            let active_rect = Rect::from_min_max(pos2(x_start, corridor_top), pos2(marker_x, corridor_bottom));
-            p.rect_filled(active_rect, 0.0, t.form_success.gamma_multiply(0.08));
+    } else if min_col >= marker_visual_col {
+        let rect = Rect::from_min_max(pos2(x_start, corridor_top), pos2(x_end, corridor_bottom));
+        p.rect_filled(rect, 0.0, t.text_dim.gamma_multiply(0.08));
+        if x_start >= grid_origin_x - 1.0 {
+            paint_bracket_open(p, x_start, grid_origin_x, bracket_top, bracket_bottom, t.text_dim, Some(marker_x));
+        }
+        if x_end >= grid_origin_x {
+            paint_bracket_close(p, x_end, bracket_top, bracket_bottom, t.text_dim, Some(marker_x));
+        }
+    } else {
+        // Active segment (left of marker)
+        let active_rect = Rect::from_min_max(pos2(x_start, corridor_top), pos2(marker_x, corridor_bottom));
+        p.rect_filled(active_rect, 0.0, t.form_success.gamma_multiply(0.08));
 
-            // Inactive segment (right of marker)
-            let inactive_rect = Rect::from_min_max(pos2(marker_x, corridor_top), pos2(x_end, corridor_bottom));
-            p.rect_filled(inactive_rect, 0.0, t.text_dim.gamma_multiply(0.08));
+        // Inactive segment (right of marker)
+        let inactive_rect = Rect::from_min_max(pos2(marker_x, corridor_top), pos2(x_end, corridor_bottom));
+        p.rect_filled(inactive_rect, 0.0, t.text_dim.gamma_multiply(0.08));
 
-            if x_start >= grid_origin_x - 1.0 {
-                paint_bracket_open(p, x_start, grid_origin_x, bracket_top, bracket_bottom, t.form_success, Some(marker_x));
-            }
-            if x_end >= grid_origin_x {
-                paint_bracket_close(p, x_end, bracket_top, bracket_bottom, t.text_dim, Some(marker_x));
-            }
+        if x_start >= grid_origin_x - 1.0 {
+            paint_bracket_open(p, x_start, grid_origin_x, bracket_top, bracket_bottom, t.form_success, Some(marker_x));
+        }
+        if x_end >= grid_origin_x {
+            paint_bracket_close(p, x_end, bracket_top, bracket_bottom, t.text_dim, Some(marker_x));
         }
     }
 }
