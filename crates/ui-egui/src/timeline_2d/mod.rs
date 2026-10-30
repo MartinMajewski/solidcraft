@@ -91,15 +91,8 @@ pub fn timeline(app: &mut SolveApp, ui: &mut Ui) {
     overlay.show(ui.ctx(), |ui| {
         ui.set_min_size(rail_bounds.size());
         ui.set_clip_rect(ui.ctx().content_rect());
-        let (rect, resp) = ui.allocate_exact_size(rail_bounds.size(), egui::Sense::click_and_drag());
+        let (_, resp) = ui.allocate_exact_size(rail_bounds.size(), egui::Sense::click_and_drag());
         let resp = resp.on_hover_cursor(egui::CursorIcon::ResizeVertical);
-
-        if resp.hovered() || resp.dragged() {
-            ui.painter().line_segment(
-                [pos2(rect.left(), view_rect.top()), pos2(rect.right(), view_rect.top())],
-                egui::Stroke::new(2.0, t.accent),
-            );
-        }
 
         if resp.dragged() {
             let dy = ui.input(|i| i.pointer.delta().y);
