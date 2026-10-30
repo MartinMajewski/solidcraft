@@ -239,10 +239,28 @@ mod tests {
         let combine_feat = h.app.session.doc.features.last().unwrap();
         let affected = canvas::feature_affected_components(
             &h.app.session.doc,
-            Some(h.app.session.model.state().bodies.as_slice()),
+            Some(&h.app.session.model),
             combine_feat,
         );
         assert_eq!(affected, vec![0, comp1]);
+
+        // 5. Chamfer in Component 1 on edge of combined body
+        let m = h.app.session.model.state().bodies[0].mesh();
+        let p0 = m.edges[0][0];
+        let p1 = m.edges[0][1];
+        let edge_mid = (p0 + p1) * 0.5;
+        h.app.run("solid.chamfer", json!({
+            "edges": [[edge_mid.x, edge_mid.y, edge_mid.z]],
+            "distance": 1.0,
+        })).unwrap();
+
+        let chamfer_feat = h.app.session.doc.features.last().unwrap();
+        let chamfer_affected = canvas::feature_affected_components(
+            &h.app.session.doc,
+            Some(&h.app.session.model),
+            chamfer_feat,
+        );
+        assert!(chamfer_affected.contains(&0) && chamfer_affected.contains(&comp1));
 
         // Render frames and verify no panics
         h.call("ui.resize", json!({"width": 1400, "height": 900}));

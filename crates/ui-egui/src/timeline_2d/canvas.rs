@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use egui::{
     FontId, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2,
 };
-use solidcraft_engine::doc::{Document, Feature, FeatureKind, ModelBody};
+use solidcraft_engine::doc::{Document, Feature, FeatureKind, Model};
 use crate::SolveApp;
 use crate::theme::Tokens;
 use crate::ui_kit::{HistoryTransport, Menu};
@@ -81,8 +81,6 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
     };
     component_names.insert(0, root_name);
 
-    let model_state = app.session.model.state();
-    let model_bodies = Some(model_state.bodies.as_slice());
     for comp in &app.session.doc.components {
         if comp.id != 0 && !component_ids.contains(&comp.id) {
             component_ids.push(comp.id);
@@ -90,16 +88,23 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
             component_colors.insert(comp.id, comp.identification_color);
         }
     }
-    for f in &app.session.doc.features {
-        for cid in feature_affected_components(&app.session.doc, model_bodies, f) {
-            if !component_ids.contains(&cid) {
-                let comp_opt = app.session.doc.components.iter().find(|c| c.id == cid);
-                let name = comp_opt.map(|c| c.name.clone()).unwrap_or_else(|| format!("Component {}", cid));
-                let color = comp_opt.and_then(|c| c.identification_color);
-                component_ids.push(cid);
-                component_names.insert(cid, name);
-                component_colors.insert(cid, color);
+
+    let mut feature_components_map: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+    {
+        let model = Some(&app.session.model);
+        for f in &app.session.doc.features {
+            let affected = feature_affected_components(&app.session.doc, model, f);
+            for &cid in &affected {
+                if !component_ids.contains(&cid) {
+                    let comp_opt = app.session.doc.components.iter().find(|c| c.id == cid);
+                    let name = comp_opt.map(|c| c.name.clone()).unwrap_or_else(|| format!("Component {}", cid));
+                    let color = comp_opt.and_then(|c| c.identification_color);
+                    component_ids.push(cid);
+                    component_names.insert(cid, name);
+                    component_colors.insert(cid, color);
+                }
             }
+            feature_components_map.insert(f.id, affected);
         }
     }
 
@@ -242,7 +247,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
 
                 for &fid in features {
                     if let Some(f) = app.session.doc.feature(fid) {
-                        let affected = feature_affected_components(&app.session.doc, model_bodies, f);
+                        let affected = feature_components_map.get(&fid).cloned().unwrap_or_else(|| vec![f.component]);
                         let mut tracks: Vec<usize> = affected
                             .iter()
                             .filter_map(|cid| component_ids.iter().position(|id| id == cid))
@@ -792,9 +797,9 @@ fn paint_two_tier_header(
                 let available_right = banner_rect.width() - (title_w + 24.0);
                 let right_pos = pos2(banner_rect.right() - 6.0, banner_rect.center().y);
                 if available_right > 50.0 {
-                    p.text(right_pos, egui::Align2::RIGHT_CENTER, "Close ▴", FontId::proportional(9.0), text_color);
+                    p.text(right_pos, egui::Align2::RIGHT_CENTER, "Close ◀", FontId::proportional(9.0), text_color);
                 } else if available_right > 16.0 {
-                    p.text(right_pos, egui::Align2::RIGHT_CENTER, "▴", FontId::proportional(9.0), text_color);
+                    p.text(right_pos, egui::Align2::RIGHT_CENTER, "◀", FontId::proportional(9.0), text_color);
                 }
             }
         }
@@ -1193,11 +1198,51 @@ fn paint_dotted_vertical_line(p: &egui::Painter, x: f32, y_start: f32, y_end: f3
 /// Returns the sorted, deduplicated list of component IDs affected by a feature.
 pub fn feature_affected_components(
     doc: &Document,
-    model_bodies: Option<&[ModelBody]>,
+    model: Option<&Model>,
     f: &Feature,
 ) -> Vec<u64> {
     let mut comps = BTreeSet::new();
     comps.insert(f.component);
+
+    // 1. If evaluation results exist in model, compare state before and after this feature
+    if let Some(m) = model
+        && let Some(res) = m.result(f.id)
+    {
+        let before = m.state_before(f.id);
+        let after = &res.state;
+
+        for b_before in &before.bodies {
+            if let Some(b_after) = after.body(&b_before.name) {
+                if b_before.geometry_key() != b_after.geometry_key() || b_before.component != b_after.component {
+                    comps.insert(doc.model_body_component(b_before));
+                    comps.insert(doc.model_body_component(b_after));
+                }
+            } else {
+                comps.insert(doc.model_body_component(b_before));
+            }
+        }
+
+        for b_after in &after.bodies {
+            if b_after.feature == f.id || before.body(&b_after.name).is_none() {
+                comps.insert(doc.model_body_component(b_after));
+            }
+        }
+    }
+
+    // 2. Edge name references (e.g. F1:top|F4:side in fillets and chamfers)
+    for name in &f.edge_names {
+        for part in name.split(|c: char| !c.is_ascii_alphanumeric()) {
+            if let Some(id_str) = part.strip_prefix('F')
+                && let Ok(fid) = id_str.parse::<u64>()
+                && let Some(feat) = doc.feature(fid)
+            {
+                comps.insert(feat.component);
+            }
+        }
+    }
+
+    let model_state = model.map(|m| m.state());
+    let model_bodies = model_state.as_deref().map(|s| s.bodies.as_slice());
 
     let resolve_body = |b: &str| -> Option<u64> {
         let trimmed = b.trim();
@@ -1257,9 +1302,28 @@ pub fn feature_affected_components(
                 }
             }
         }
-        FeatureKind::Fillet { body: Some(b), .. }
-        | FeatureKind::Chamfer { body: Some(b), .. }
-        | FeatureKind::Split { body: b, .. } => {
+        FeatureKind::Fillet { body, edges, .. }
+        | FeatureKind::Chamfer { body, edges, .. } => {
+            if let Some(b) = body
+                && let Some(cid) = resolve_body(b.as_ref())
+            {
+                comps.insert(cid);
+            }
+            if let Some(bodies) = model_bodies {
+                for p in edges {
+                    for b in bodies {
+                        let mesh = b.mesh();
+                        let is_near = mesh.edges.iter().any(|e| {
+                            e.windows(2).any(|w| p.0.dist_to_segment(w[0], w[1]) < 0.05)
+                        });
+                        if is_near {
+                            comps.insert(doc.model_body_component(b));
+                        }
+                    }
+                }
+            }
+        }
+        FeatureKind::Split { body: b, .. } => {
             if let Some(cid) = resolve_body(b.as_ref()) {
                 comps.insert(cid);
             }
