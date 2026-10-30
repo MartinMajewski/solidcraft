@@ -378,4 +378,56 @@ mod tests {
         h.call("ui.resize", json!({"width": 1400, "height": 900}));
         h.frames(3);
     }
+
+    #[test]
+    fn test_group_header_truncation_and_tooltip() {
+        let mut h = Harness::new();
+        h.app.preferences.timeline_2d = true;
+        h.call("ui.resize", json!({"width": 1400, "height": 900}));
+        h.frames(1);
+
+        let ctx = h.ctx.clone();
+        let painter =
+            egui::Painter::new(ctx.clone(), egui::LayerId::background(), egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 1000.0)));
+
+        let font = egui::FontId::proportional(10.0);
+        let color = egui::Color32::WHITE;
+
+        // 1. Long name in narrow width (48.0 pt for 2 columns): should be truncated with ellipsis
+        let long_name = "Foundation Structures";
+        let (fitted, is_cut) = canvas::fit_group_banner_title(&painter, long_name, 2, 48.0, font.clone(), color);
+        assert!(is_cut, "Long name in 48pt width should be cut");
+        assert!(fitted.contains('…'), "Fitted title should contain ellipsis");
+        assert!(fitted.ends_with("(2)"), "Fitted title should preserve member count suffix");
+        let measured_w = painter.layout_no_wrap(fitted.clone(), font.clone(), color).size().x;
+        assert!(measured_w <= 48.0, "Measured width {} must fit within 48.0", measured_w);
+
+        // 2. Wide width (300.0 pt): should NOT be cut
+        let (wide_fitted, wide_is_cut) = canvas::fit_group_banner_title(&painter, long_name, 2, 300.0, font.clone(), color);
+        assert!(!wide_is_cut, "Long name in 300pt width should not be cut");
+        assert_eq!(wide_fitted, "Foundation Structures (2)");
+
+        // 3. Extremely narrow width (10.0 pt): should not crash or exceed width
+        let (tiny_fitted, tiny_is_cut) = canvas::fit_group_banner_title(&painter, long_name, 2, 10.0, font.clone(), color);
+        assert!(tiny_is_cut);
+        let tiny_w = painter.layout_no_wrap(tiny_fitted, font.clone(), color).size().x;
+        assert!(tiny_w <= 10.0);
+
+        // 4. Create features and group in a design to exercise rendering with truncation
+        h.app.run("solid.box", json!({"length": 20.0, "width": 20.0, "height": 10.0})).unwrap();
+        h.app.run("solid.box", json!({"length": 15.0, "width": 15.0, "height": 10.0, "corner": [30, 0, 0]})).unwrap();
+        let box1_id = h.app.session.doc.features[0].id;
+        let box2_id = h.app.session.doc.features[1].id;
+
+        let res = h.app.run_heavy(
+            "timeline.group",
+            json!({
+                "features": [box1_id, box2_id],
+                "name": "Very Long Custom Group Name That Exceeds Two Columns",
+            }),
+        );
+        assert!(res.is_ok());
+
+        h.frames(3);
+    }
 }

@@ -837,7 +837,17 @@ fn paint_two_tier_header(
                     app.session.doc.timeline_groups.iter().find(|g| g.id == grp_id).map(|g| g.name.clone()).unwrap_or_else(|| "Group".to_string());
                 let g_feats = app.session.doc.timeline_groups.iter().find(|g| g.id == grp_id).map(|g| g.features.clone()).unwrap_or_default();
 
-                let resp = resp.on_hover_text(format!("Click to fold {}", grp_name));
+                let pill_color = if is_active { t.accent.gamma_multiply(0.2) } else { t.text_dim.gamma_multiply(0.2) };
+                let stroke_color = if is_active { t.accent.gamma_multiply(0.45) } else { t.border };
+                let text_color = if is_active { t.accent } else { t.text_dim };
+
+                let member_count = end_col - start_col + 1;
+                let max_title_width = (banner_rect.width() - 22.0).max(0.0);
+                let font = FontId::proportional(10.0);
+                let (displayed_title, is_truncated) = fit_group_banner_title(p, &grp_name, member_count, max_title_width, font.clone(), text_color);
+
+                let tooltip = if is_truncated { format!("{grp_name} ({member_count})\nClick to fold") } else { format!("Click to fold {grp_name}") };
+                let resp = resp.on_hover_text(tooltip);
 
                 let gid = grp_id;
                 let g_name = grp_name.clone();
@@ -860,35 +870,33 @@ fn paint_two_tier_header(
                         ui.close();
                     }
                 });
-                let pill_color = if is_active { t.accent.gamma_multiply(0.2) } else { t.text_dim.gamma_multiply(0.2) };
-                let stroke_color = if is_active { t.accent.gamma_multiply(0.45) } else { t.border };
-                let text_color = if is_active { t.accent } else { t.text_dim };
 
                 p.rect_filled(banner_rect, 4.0, pill_color);
                 p.rect_stroke(banner_rect, 4.0, Stroke::new(1.0, stroke_color), StrokeKind::Inside);
 
-                let member_count = end_col - start_col + 1;
+                let p_banner = p.with_clip_rect(banner_rect);
 
                 // Folder icon
                 let icon_rect = Rect::from_center_size(pos2(banner_rect.left() + 10.0, banner_rect.center().y), vec2(11.0, 11.0));
                 if is_active {
-                    crate::icons::paint_icon(p, icon_rect, "folder", 1.0);
+                    crate::icons::paint_icon(&p_banner, icon_rect, "folder", 1.0);
                 } else {
-                    crate::icons::paint_ink(p, icon_rect, "folder", t.text_dim);
+                    crate::icons::paint_ink(&p_banner, icon_rect, "folder", t.text_dim);
                 }
 
-                let title_text = format!("{} ({})", grp_name, member_count);
-                let galley = p.layout_no_wrap(title_text, FontId::proportional(10.0), text_color);
-                let title_w = galley.size().x;
-                let title_pos = pos2(banner_rect.left() + 18.0, banner_rect.center().y - galley.size().y / 2.0);
-                p.galley(title_pos, galley, text_color);
+                if !displayed_title.is_empty() {
+                    let galley = p_banner.layout_no_wrap(displayed_title, font.clone(), text_color);
+                    let title_w = galley.size().x;
+                    let title_pos = pos2(banner_rect.left() + 18.0, banner_rect.center().y - galley.size().y / 2.0);
+                    p_banner.galley(title_pos, galley, text_color);
 
-                let available_right = banner_rect.width() - (title_w + 24.0);
-                let right_pos = pos2(banner_rect.right() - 6.0, banner_rect.center().y);
-                if available_right > 50.0 {
-                    p.text(right_pos, egui::Align2::RIGHT_CENTER, "Close ◀", FontId::proportional(9.0), text_color);
-                } else if available_right > 16.0 {
-                    p.text(right_pos, egui::Align2::RIGHT_CENTER, "◀", FontId::proportional(9.0), text_color);
+                    let available_right = banner_rect.width() - (title_w + 24.0);
+                    let right_pos = pos2(banner_rect.right() - 6.0, banner_rect.center().y);
+                    if available_right > 50.0 {
+                        p_banner.text(right_pos, egui::Align2::RIGHT_CENTER, "Close ◀", FontId::proportional(9.0), text_color);
+                    } else if available_right > 16.0 {
+                        p_banner.text(right_pos, egui::Align2::RIGHT_CENTER, "◀", FontId::proportional(9.0), text_color);
+                    }
                 }
             }
         }
@@ -1029,6 +1037,53 @@ fn paint_action_chip(
     }
 }
 
+/// Helper: calculates the fitted/truncated group banner title and whether it was truncated.
+pub fn fit_group_banner_title(
+    p: &egui::Painter,
+    grp_name: &str,
+    member_count: usize,
+    max_title_width: f32,
+    font: FontId,
+    text_color: egui::Color32,
+) -> (String, bool) {
+    let full_title = format!("{grp_name} ({member_count})");
+    let full_w = p.layout_no_wrap(full_title.clone(), font.clone(), text_color).size().x;
+
+    if full_w <= max_title_width {
+        (full_title, false)
+    } else {
+        let count_suffix = format!(" ({member_count})");
+        let suffix_with_ellipsis = format!("…{count_suffix}");
+        let suffix_w = p.layout_no_wrap(suffix_with_ellipsis.clone(), font.clone(), text_color).size().x;
+
+        if suffix_w <= max_title_width {
+            let mut best = suffix_with_ellipsis;
+            let chars: Vec<char> = grp_name.chars().collect();
+            for len in (1..chars.len()).rev() {
+                let prefix: String = chars[..len].iter().collect();
+                let candidate = format!("{prefix}…{count_suffix}");
+                if p.layout_no_wrap(candidate.clone(), font.clone(), text_color).size().x <= max_title_width {
+                    best = candidate;
+                    break;
+                }
+            }
+            (best, true)
+        } else {
+            let mut best = String::new();
+            let chars: Vec<char> = grp_name.chars().collect();
+            for len in (1..chars.len()).rev() {
+                let prefix: String = chars[..len].iter().collect();
+                let candidate = format!("{prefix}…");
+                if p.layout_no_wrap(candidate.clone(), font.clone(), text_color).size().x <= max_title_width {
+                    best = candidate;
+                    break;
+                }
+            }
+            (best, true)
+        }
+    }
+}
+
 /// Helper: paints the virtual group chip spanning component tracks.
 fn paint_virtual_group_chip(p: &egui::Painter, rect: Rect, group_name: &str, count: usize, is_active: bool, is_selected: bool, t: &Tokens) {
     let border_color = if is_selected { if is_active { t.text } else { t.text_dim } } else { if is_active { t.accent } else { t.border } };
@@ -1071,10 +1126,29 @@ fn paint_virtual_group_chip(p: &egui::Painter, rect: Rect, group_name: &str, cou
     // Vertical 90-degree rotated title text
     let title_pos = pos2(rect.center().x, rect.top() + HEADER_T2_HEIGHT + 30.0);
     let title_color = if is_active { t.text } else { t.text_dim };
-    let mut shape =
-        egui::epaint::TextShape::new(title_pos, p.layout_no_wrap(group_name.to_string(), FontId::proportional(11.0), title_color), title_color);
-    shape.angle = std::f32::consts::FRAC_PI_2;
-    p.add(shape);
+    let max_v_len = (rect.bottom() - (rect.top() + HEADER_T2_HEIGHT + 36.0)).max(0.0);
+    let font = FontId::proportional(11.0);
+    let full_w = p.layout_no_wrap(group_name.to_string(), font.clone(), title_color).size().x;
+    let displayed_name = if full_w <= max_v_len {
+        group_name.to_string()
+    } else {
+        let mut best = String::new();
+        let chars: Vec<char> = group_name.chars().collect();
+        for len in (1..chars.len()).rev() {
+            let candidate = format!("{}…", chars[..len].iter().collect::<String>());
+            if p.layout_no_wrap(candidate.clone(), font.clone(), title_color).size().x <= max_v_len {
+                best = candidate;
+                break;
+            }
+        }
+        best
+    };
+    if !displayed_name.is_empty() {
+        let p_chip = p.with_clip_rect(rect);
+        let mut shape = egui::epaint::TextShape::new(title_pos, p_chip.layout_no_wrap(displayed_name, font, title_color), title_color);
+        shape.angle = std::f32::consts::FRAC_PI_2;
+        p_chip.add(shape);
+    }
 }
 
 /// Helper: maps a feature ID to its visual column index on the 2D timeline grid.
