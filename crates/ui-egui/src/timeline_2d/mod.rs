@@ -7,7 +7,7 @@ pub mod canvas;
 pub mod deps;
 pub mod state;
 
-use egui::{Rect, Ui, UiBuilder};
+use egui::{Rect, Ui, UiBuilder, pos2};
 use crate::SolveApp;
 use crate::theme::Tokens;
 use crate::ui_kit::{Container, Edge, Surface};
@@ -34,16 +34,42 @@ pub fn timeline(app: &mut SolveApp, ui: &mut Ui) {
         child.set_clip_rect(rect);
         canvas::paint_timeline_2d(app, &mut child, true);
     } else {
+        let available = ui.available_rect_before_wrap();
+        let min_h = canvas::HEADER_TOTAL_HEIGHT + canvas::ROW_HEIGHT;
+        let max_h = (available.height() * 0.75).max(min_h);
+
+        let height_id = egui::Id::new("sc_timeline_2d_height");
+        let remembered_h: f32 = ui.ctx().data(|d| d.get_temp(height_id)).unwrap_or(canvas::DOCK_TOTAL_HEIGHT);
+        let current_h = remembered_h.clamp(min_h, max_h);
+
+        let rounding = egui::CornerRadius {
+            nw: t.radius_lg,
+            ne: t.radius_lg,
+            sw: 0,
+            se: 0,
+        };
+        let frame = Container::new(ui.ctx(), Surface::Panel)
+            .edge_frame(t.timeline)
+            .corner_radius(rounding);
+
         let response = Container::new(ui.ctx(), Surface::Panel)
             .edge("sc_timeline", Edge::Bottom)
-            .exact_size(canvas::DOCK_TOTAL_HEIGHT)
-            .frame(Container::new(ui.ctx(), Surface::Panel).edge_frame(t.timeline))
+            .resizable(true)
+            .default_size(current_h)
+            .size_range(min_h..=max_h)
+            .frame(frame)
             .show(ui, |ui| {
                 canvas::paint_timeline_2d(app, ui, false);
             });
-        let frame = Container::new(ui.ctx(), Surface::Panel).edge_frame(t.timeline);
+
+        let actual_h = response.response.rect.height();
+        if (actual_h - remembered_h).abs() > 0.5 {
+            ui.ctx().data_mut(|d| d.insert_temp(height_id, actual_h));
+        }
+
         Container::paint_inset(ui.painter(), response.response.rect - frame.outer_margin, frame);
         app.shell.history = Some(response.response.rect);
         crate::scenario::publish_rect("history:strip", response.response.rect);
+        crate::scenario::publish_handle("timeline:top_rail", pos2(response.response.rect.center().x, response.response.rect.top()));
     }
 }

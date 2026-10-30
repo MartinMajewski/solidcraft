@@ -52,7 +52,7 @@ impl VisualColumn {
 }
 
 /// Renders the 2D History Browser dock contents.
-pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, _floating: bool) {
+pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
     let t = Tokens::get();
     let accent = crate::theme::TabAccent::for_tab(&t, &app.ui.tab);
     let total_rect = ui.max_rect();
@@ -435,6 +435,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, _floating: bool) {
         &component_colors,
         state.scroll_y,
         state.overscroll_y,
+        floating,
         &t,
     );
 
@@ -442,7 +443,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, _floating: bool) {
     let marker_col_x = grid_origin_x + marker_slot.min(num_columns) as f32 * COL_WIDTH - state.scroll_x;
     if marker_col_x >= grid_origin_x - 10.0 && marker_col_x <= total_rect.right() + 10.0 {
         let resp = ui.interact(
-            Rect::from_min_size(pos2(marker_col_x - 8.0, total_rect.top()), vec2(16.0, HEADER_T1_HEIGHT)),
+            Rect::from_min_size(pos2(marker_col_x - 8.0, total_rect.top() + 4.0), vec2(16.0, HEADER_T1_HEIGHT - 4.0)),
             ui.id().with("marker_head_2d"),
             Sense::drag(),
         );
@@ -543,7 +544,8 @@ fn paint_two_tier_header(
         pos2(grid_origin_x, total_rect.top()),
         pos2(total_rect.right(), total_rect.top() + HEADER_TOTAL_HEIGHT),
     );
-    p.rect_filled(header_rect, 0.0, t.timeline);
+    let header_rounding = egui::CornerRadius { nw: 0, ne: t.radius_lg, sw: 0, se: 0 };
+    p.rect_filled(header_rect, header_rounding, t.timeline);
 
     // Tier 1 / Tier 2 separator line
     p.line_segment(
@@ -637,12 +639,17 @@ fn paint_two_tier_header(
                 let member_count = end_col - start_col + 1;
                 let title_text = format!("📁 {} ({})", grp_name, member_count);
 
+                let galley = p.layout_no_wrap(title_text, FontId::proportional(10.0), text_color);
+                let title_w = galley.size().x;
                 let left_pos = pos2(banner_rect.left() + 6.0, banner_rect.center().y);
-                p.text(left_pos, egui::Align2::LEFT_CENTER, title_text, FontId::proportional(10.0), text_color);
+                p.galley(pos2(left_pos.x, left_pos.y - galley.size().y / 2.0), galley, text_color);
 
-                if banner_rect.width() > 70.0 {
-                    let right_pos = pos2(banner_rect.right() - 6.0, banner_rect.center().y);
+                let available_right = banner_rect.width() - (title_w + 16.0);
+                let right_pos = pos2(banner_rect.right() - 6.0, banner_rect.center().y);
+                if available_right > 45.0 {
                     p.text(right_pos, egui::Align2::RIGHT_CENTER, "Close ▴", FontId::proportional(9.0), text_color);
+                } else if available_right > 15.0 {
+                    p.text(right_pos, egui::Align2::RIGHT_CENTER, "▴", FontId::proportional(9.0), text_color);
                 }
             }
         }
@@ -661,10 +668,17 @@ fn paint_pinned_left(
     component_colors: &BTreeMap<u64, Option<[u8; 3]>>,
     scroll_y: f32,
     overscroll_y: f32,
+    floating: bool,
     t: &Tokens,
 ) {
     let pinned_rect = Rect::from_min_max(total_rect.left_top(), pos2(total_rect.left() + PINNED_LEFT_WIDTH, total_rect.bottom()));
-    p.rect_filled(pinned_rect, 0.0, t.panel);
+    let pinned_rounding = egui::CornerRadius {
+        nw: t.radius_lg,
+        ne: 0,
+        sw: if floating { t.radius_lg } else { 0 },
+        se: 0,
+    };
+    p.rect_filled(pinned_rect, pinned_rounding, t.panel);
 
     // Vertical seam divider
     p.line_segment(
@@ -674,29 +688,27 @@ fn paint_pinned_left(
 
     // Leading Transport Header (top 44px)
     let transport_header_rect = Rect::from_min_size(pinned_rect.left_top(), vec2(PINNED_LEFT_WIDTH, HEADER_TOTAL_HEIGHT));
-    p.rect_filled(transport_header_rect, 0.0, t.timeline);
-
-    // Top Title
-    p.text(
-        pos2(pinned_rect.left() + 8.0, pinned_rect.top() + 10.0),
-        egui::Align2::LEFT_CENTER,
-        crate::i18n::tr("ui.timeline_2d_transport_title"),
-        FontId::proportional(9.0),
-        t.text_dim,
+    p.rect_filled(
+        transport_header_rect,
+        egui::CornerRadius { nw: t.radius_lg, ne: 0, sw: 0, se: 0 },
+        t.timeline,
     );
 
-    // Transport buttons
+    // Transport buttons centered and scaled across the header
     let controls = HistoryTransport::shown(app.preferences.history_play_button);
-    let btn_size = 20.0;
-    let mut bx = pinned_rect.left() + 8.0;
-    let by = pinned_rect.top() + 22.0;
+    let btn_size = 26.0;
+    let gap = 4.0;
+    let num_controls = controls.len();
+    let total_width = num_controls as f32 * btn_size + num_controls.saturating_sub(1) as f32 * gap;
+    let mut bx = pinned_rect.left() + (PINNED_LEFT_WIDTH - total_width) / 2.0;
+    let by = pinned_rect.top() + (HEADER_TOTAL_HEIGHT - btn_size) / 2.0;
 
     for &control in controls {
         let b_rect = Rect::from_min_size(pos2(bx, by), vec2(btn_size, btn_size));
         let playing = app.timeline_playback.is_some();
         let resp = control.show(ui, b_rect, playing);
         crate::timeline::transport_response(app, control, &resp);
-        bx += btn_size + 3.0;
+        bx += btn_size + gap;
     }
 
     // Component rows
