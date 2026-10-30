@@ -2778,7 +2778,7 @@ impl SolveApp {
             } else {
                 show_timeline.then(|| {
                     if self.preferences.timeline_2d {
-                        timeline_2d::floating_rect(full)
+                        timeline_2d::floating_rect(ui.ctx(), full)
                     } else {
                         timeline::floating_rect(full)
                     }
