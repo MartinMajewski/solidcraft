@@ -29,8 +29,13 @@ In parametric assemblies, bodies and operations belong to specific components wi
 hierarchy. The 2D History Browser represents this relationship directly:
 
 - **Rows (Tracks)**: The top track represents the root design (`Root (Design)`), followed by each
-  active or inactive component (`Housing`, `Shaft`, `Bearing`, etc.) listed in hierarchy order.
-  Each track header features a colored indicator dot matching its component tree appearance.
+  active or inactive component (`Left Handle`, `Right Handle`, `Pivot Bolt`, etc.) listed in hierarchy order.
+  Each track header features a circular **activation radio indicator** (`○` inactive, `⊙` active)
+  mirroring the component tree in the browser. Clicking any component track header immediately
+  activates that component (`component.activate`), seamlessly switching the modeling focus.
+- **Active Track Highlighting**: The currently active component track is illuminated with a subtle
+  accent background wash and accented grid dividers. This provides continuous visual feedback during
+  modeling, preventing actions from being inadvertently performed in the wrong component.
 - **Columns (Global Steps)**: Features are arranged from left to right in absolute chronological
   creation order. Unused track cells display a subtle placeholder dot (`·`), making step alignment
   immediately evident across all components.
@@ -85,7 +90,9 @@ Features can be organized into named groups to keep extensive timelines clean an
 2. **Group Creation**: Right-click any contiguous multi-selection and choose **Group Selection**.
 3. **Folding & Expansion**:
    - In its expanded state, the group spans its member steps under a labeled bracket in the Tier 2
-     header.
+     header. If the group name is long or the member span is narrow, the title gracefully truncates
+     with an ellipsis (`...`) to preserve dock layout, revealing the full name and member count in a
+     helpful tooltip on hover.
    - Clicking the fold icon or double-clicking the group header folds the features into a unified
      **Virtual Group Chip**.
    - The virtual group chip features an integrated header cap, a member count badge (e.g. `4`), an
@@ -118,12 +125,79 @@ The blue rollback pin determines the active history boundary:
 
 ![Timeline dock closeup with folded group card, combine connector, and inactive steps](../generated/timeline-2d-dock-closeup.png)
 
+## Practical Design Walkthrough: Multi-Component Pliers Assembly
+
+SolidCraft includes a practical assembly model demonstrating realistic multi-component CAD modeling,
+in-process design alterations, and chronological timeline restructuring at `docs/pliers-demo.sc`.
+
+The assembly models a functional mechanical tool consisting of three separate components:
+- **Root Component (`pliers-demo`)**: Houses only shared common reference entities (e.g. `Pivot Alignment Ref` sketch defining the central pivot axis on the XY plane), without owning part bodies.
+- **`Left Handle` Component**: Models the left gripping jaw, the lower half of the stepped lap pivot boss, the long ergonomic lever arm, and the central pivot bore.
+- **`Right Handle` Component**: Models the opposing gripping jaw, the complementary upper half of the stepped lap pivot boss, the opposing lever arm, and the mating pivot bore.
+- **`Pivot Bolt` Component**: Models the central connecting bolt with its cylindrical shank, flanged head cap, and lower retaining washer that mechanically unites both handle halves.
+
+To open the pliers project:
+```sh
+cargo run -- docs/pliers-demo.sc
+```
+
+### 1. Exploratory "Vibe-Motivated" Modeling
+
+During early concept modeling, a designer naturally works iteratively across parts—sketching a jaw,
+placing a pivot boss on one handle, roughing out the pin, jumping back to add lever arms, and then
+cutting bores.
+
+In a traditional 1D linear timeline, these interleaved operations form an unreadable jumble of mixed
+components. In the 2D History Browser, the multi-track matrix immediately makes component ownership
+crystal clear:
+
+![Initial unorganized exploratory modeling sequence with multi-track component lanes](../generated/timeline-2d-pliers-unorganized.png)
+
+- Each component track clearly separates the operations belonging to `Left Handle`, `Right Handle`,
+  and `Pivot Bolt`.
+- The active component radio indicator (`⊙ Pivot Bolt`) and track row wash highlight exactly where new
+  features are currently being authored.
+
+### 2. In-Place Alteration & DAG Corridor Inspection
+
+As design requirements evolve, the designer alters features directly on the timeline using `timeline.edit`
+(for instance, lengthening both lever arms from 110 mm to 135 mm for increased grip mechanical advantage,
+and enlarging the bolt head cap):
+
+![Altered pliers assembly with selected Left Lever Arm and its topological Movable Corridor](../generated/timeline-2d-pliers-alteration.png)
+
+Clicking any feature chip immediately surfaces its place in the parametric Directed Acyclic Graph (DAG):
+- The selected feature (`Left Lever Arm`) receives a crisp white border.
+- Topological prerequisites (ancestors) light up in amber.
+- Downstream dependents light up in electric blue.
+- The **Movable Corridor (`[ ... ]`)** brackets appear across Tier 2 and the column grid, showing every
+  step where this operation can safely be reordered without invalidating the assembly.
+
+### 3. Afterthought Cleanup, Grouping & Folding
+
+Once the mechanical concepts are proven, the designer restructures the timeline into a clean, professional
+architecture:
+
+1. **Corridor Reordering**: Features are dragged horizontally within their allowed corridors to group
+   all `Left Handle` operations into contiguous steps 02–05, all `Right Handle` operations into steps 06–09,
+   and all `Pivot Bolt` operations into steps 10–12.
+2. **Feature Grouping**: Operations are grouped into named folders:
+   - `Left Handle & Jaw Mechanics (4)`
+   - `Right Handle & Jaw Mechanics (4)`
+   - `Connecting Pivot Hardware (3)`
+3. **Virtual Group Folding**: The pivot hardware group is folded into a compact **Virtual Group Card**
+   featuring an integrated header cap and member count badge `3`.
+4. **Active Component Switching**: Clicking the radio button next to `Right Handle` immediately activates
+   the component, displaying the active radio indicator `⊙ Right Handle` and illuminating the entire track
+   row with an accent wash.
+
+![Organized, grouped, and folded timeline with active component highlighting](../generated/timeline-2d-pliers-organized.png)
+
 ## The Reference Demo Project
 
-SolidCraft includes a reference model demonstrating all 2D History Browser capabilities and edge
-cases at `docs/2d-timeline-demo.sc`.
+SolidCraft also includes a comprehensive edge-case test model at `docs/2d-timeline-demo.sc`.
 
-To open the demo project:
+To open the reference demo project:
 ```sh
 cargo run -- docs/2d-timeline-demo.sc
 ```

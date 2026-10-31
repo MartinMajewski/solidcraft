@@ -53,6 +53,13 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
     let state_id = ui.id().with("sc_timeline_2d_state");
     let mut state: Timeline2DState = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
 
+    // Clean up stale selections and folded groups for a clean document
+    state.selected_features.retain(|fid| app.session.doc.feature(*fid).is_some());
+    if app.session.doc.features.is_empty() {
+        state.selected_features.clear();
+        state.folded_groups.clear();
+    }
+
     // 1. Build dependency graph
     let dep_graph = DependencyGraph::from_doc(&app.session.doc);
     let total_features = app.session.doc.features.len();
