@@ -646,8 +646,7 @@ mod tests {
     #[test]
     fn test_dependency_chain_and_corridor() {
         // Build mock features: 0 (sketch) -> 1 (extrude) -> 2 (fillet) -> 3 (independent)
-        let mut graph = DependencyGraph::default();
-        graph.features = vec![100, 101, 102, 103];
+        let mut graph = DependencyGraph { features: vec![100, 101, 102, 103], ..Default::default() };
         graph.id_to_index.insert(100, 0);
         graph.id_to_index.insert(101, 1);
         graph.id_to_index.insert(102, 2);

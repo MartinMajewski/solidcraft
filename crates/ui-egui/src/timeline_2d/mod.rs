@@ -430,4 +430,51 @@ mod tests {
 
         h.frames(3);
     }
+
+    #[test]
+    fn test_active_component_highlighting_and_activation() {
+        let mut h = Harness::new();
+        h.app.preferences.timeline_2d = true;
+        h.call("ui.resize", json!({"width": 1400, "height": 900}));
+
+        // 1. Initial active component is Root (0)
+        assert_eq!(h.app.session.active_component, 0);
+
+        // Feature created while root is active belongs to component 0
+        h.app.run("solid.box", json!({"length": 20.0, "width": 20.0, "height": 10.0})).unwrap();
+        assert_eq!(h.app.session.doc.features.last().unwrap().component, 0);
+
+        // 2. Create Component 1 "Housing" with activate: false
+        let c1 = h.app.run("component.create", json!({"name": "Housing", "activate": false})).unwrap();
+        let comp1 = c1["component"].as_u64().unwrap();
+        assert_eq!(h.app.session.active_component, 0);
+
+        // 3. Create Component 2 "Shaft" with activate: true
+        let c2 = h.app.run("component.create", json!({"name": "Shaft", "activate": true})).unwrap();
+        let comp2 = c2["component"].as_u64().unwrap();
+        assert_eq!(h.app.session.active_component, comp2);
+
+        // Feature created while comp2 is active belongs to comp2
+        h.app.run("solid.box", json!({"length": 15.0, "width": 15.0, "height": 10.0, "corner": [30, 0, 0]})).unwrap();
+        assert_eq!(h.app.session.doc.features.last().unwrap().component, comp2);
+
+        // 4. Render frames to exercise paint_pinned_left with active radio and track wash
+        h.frames(3);
+
+        // 5. Exclusively activate component 1 "Housing"
+        let res = h.app.run("component.activate", json!({"component": comp1}));
+        assert!(res.is_ok());
+        assert_eq!(h.app.session.active_component, comp1);
+
+        // New feature created now automatically belongs to component 1!
+        h.app.run("solid.box", json!({"length": 10.0, "width": 10.0, "height": 5.0, "corner": [60, 0, 0]})).unwrap();
+        assert_eq!(h.app.session.doc.features.last().unwrap().component, comp1);
+
+        // 6. Switch back to Root component (0)
+        let res = h.app.run("component.activate", json!({"component": 0}));
+        assert!(res.is_ok());
+        assert_eq!(h.app.session.active_component, 0);
+
+        h.frames(3);
+    }
 }

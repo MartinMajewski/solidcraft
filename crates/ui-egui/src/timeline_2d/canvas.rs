@@ -61,7 +61,6 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
     // 2. Discover component tracks
     let mut component_ids: Vec<u64> = Vec::new();
     let mut component_names: BTreeMap<u64, String> = BTreeMap::new();
-    let mut component_colors: BTreeMap<u64, Option<[u8; 3]>> = BTreeMap::new();
 
     // Root component 0 always first
     component_ids.push(0);
@@ -72,7 +71,6 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
         if comp.id != 0 && !component_ids.contains(&comp.id) {
             component_ids.push(comp.id);
             component_names.insert(comp.id, comp.name.clone());
-            component_colors.insert(comp.id, comp.identification_color);
         }
     }
 
@@ -85,10 +83,8 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
                 if !component_ids.contains(&cid) {
                     let comp_opt = app.session.doc.components.iter().find(|c| c.id == cid);
                     let name = comp_opt.map(|c| c.name.clone()).unwrap_or_else(|| format!("Component {}", cid));
-                    let color = comp_opt.and_then(|c| c.identification_color);
                     component_ids.push(cid);
                     component_names.insert(cid, name);
-                    component_colors.insert(cid, color);
                 }
             }
             feature_components_map.insert(f.id, affected);
@@ -156,10 +152,27 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
     let grid_painter = ui.painter().with_clip_rect(grid_rect);
     let grid_line_color = t.border.gamma_multiply(0.25);
 
+    // Subtle background wash on the active component track row
+    let active_comp_id = app.session.active_component;
+    let active_track_idx = component_ids.iter().position(|&cid| cid == active_comp_id);
+    if let Some(idx) = active_track_idx {
+        let ry = total_rect.top() + HEADER_TOTAL_HEIGHT + idx as f32 * ROW_HEIGHT - state.scroll_y + state.overscroll_y;
+        let active_track_rect = Rect::from_min_size(pos2(grid_origin_x, ry), vec2((total_rect.right() - grid_origin_x).max(0.0), ROW_HEIGHT));
+        let visible_active_rect = active_track_rect.intersect(grid_rect);
+        if visible_active_rect.is_positive() {
+            grid_painter.rect_filled(visible_active_rect, 0.0, accent.color.gamma_multiply(0.045));
+        }
+    }
+
     for r in 0..=num_tracks {
         let y = total_rect.top() + HEADER_TOTAL_HEIGHT + r as f32 * ROW_HEIGHT - state.scroll_y + state.overscroll_y;
         if y >= grid_rect.top() && y <= grid_rect.bottom() {
-            grid_painter.line_segment([pos2(grid_origin_x, y), pos2(total_rect.right(), y)], Stroke::new(1.0, grid_line_color));
+            let line_stroke = if active_track_idx.is_some_and(|idx| r == idx || r == idx + 1) {
+                Stroke::new(1.0, accent.color.gamma_multiply(0.20))
+            } else {
+                Stroke::new(1.0, grid_line_color)
+            };
+            grid_painter.line_segment([pos2(grid_origin_x, y), pos2(total_rect.right(), y)], line_stroke);
         }
     }
     for c in 0..=num_columns {
@@ -546,19 +559,7 @@ pub fn paint_timeline_2d(app: &mut SolveApp, ui: &mut Ui, floating: bool) {
     }
 
     // 10. Paint Pinned Left Headers & Transport Controls
-    paint_pinned_left(
-        &painter,
-        ui,
-        app,
-        total_rect,
-        &component_ids,
-        &component_names,
-        &component_colors,
-        state.scroll_y,
-        state.overscroll_y,
-        floating,
-        &t,
-    );
+    paint_pinned_left(&painter, ui, app, total_rect, &component_ids, &component_names, state.scroll_y, state.overscroll_y, floating, &t);
 
     // 11. Paint Extended Rollback Marker
     let marker_col_x = grid_origin_x + marker_visual_col.min(num_columns) as f32 * COL_WIDTH - state.scroll_x;
@@ -912,7 +913,6 @@ fn paint_pinned_left(
     total_rect: Rect,
     component_ids: &[u64],
     component_names: &BTreeMap<u64, String>,
-    component_colors: &BTreeMap<u64, Option<[u8; 3]>>,
     scroll_y: f32,
     overscroll_y: f32,
     floating: bool,
@@ -949,6 +949,7 @@ fn paint_pinned_left(
     // Component rows
     let rows_clip = Rect::from_min_max(pos2(pinned_rect.left(), total_rect.top() + HEADER_TOTAL_HEIGHT), pinned_rect.right_bottom());
     let row_p = p.with_clip_rect(rows_clip);
+    let active_comp_id = app.session.active_component;
 
     for (r_idx, &cid) in component_ids.iter().enumerate() {
         let ry = total_rect.top() + HEADER_TOTAL_HEIGHT + r_idx as f32 * ROW_HEIGHT - scroll_y + overscroll_y;
@@ -958,19 +959,47 @@ fn paint_pinned_left(
             continue;
         }
 
-        // Row background and bottom line
-        row_p.line_segment([row_rect.left_bottom(), row_rect.right_bottom()], Stroke::new(1.0, t.border.gamma_multiply(0.25)));
+        let is_active = cid == active_comp_id;
+        let name = component_names.get(&cid).map(|s| s.as_str()).unwrap_or("Component");
 
-        // Color badge
-        let color =
-            component_colors.get(&cid).and_then(|c| c.map(|[r, g, b]| egui::Rgba::from_srgba_unmultiplied(r, g, b, 255).into())).unwrap_or(t.accent);
+        let resp = ui.interact(row_rect, ui.id().with(("comp_pinned_row", cid)), Sense::click());
+        if resp.clicked() && !is_active {
+            let _ = app.run("component.activate", serde_json::json!({ "component": cid }));
+        }
 
-        let dot_pos = pos2(row_rect.left() + 14.0, row_rect.center().y);
-        row_p.circle_filled(dot_pos, 4.0, color);
+        let tip = if is_active { format!("{name} (Active Component)") } else { format!("Click to activate component {name}") };
+        let resp = resp.on_hover_text(tip);
+
+        // Active / Hover row background
+        if is_active {
+            row_p.rect_filled(row_rect, 0.0, t.accent.gamma_multiply(0.10));
+            // 3px cyan left highlight strip
+            row_p.rect_filled(Rect::from_min_size(row_rect.left_top(), vec2(3.0, ROW_HEIGHT)), 0.0, t.accent);
+        } else if resp.hovered() {
+            row_p.rect_filled(row_rect, 0.0, t.hover);
+        }
+
+        // Bottom divider line
+        let bottom_line_color = if is_active { t.accent.gamma_multiply(0.25) } else { t.border.gamma_multiply(0.25) };
+        row_p.line_segment([row_rect.left_bottom(), row_rect.right_bottom()], Stroke::new(1.0, bottom_line_color));
+
+        // Activation radio indicator (matches SolidCraft browser tree activation radio: empty circle when inactive, centered dot when active)
+        let dot_pos = pos2(row_rect.left() + 15.0, row_rect.center().y);
+        let radio_stroke_color = if is_active {
+            t.accent
+        } else if resp.hovered() {
+            t.text
+        } else {
+            t.text_dim
+        };
+        row_p.circle_stroke(dot_pos, 5.0, Stroke::new(1.2, radio_stroke_color));
+        if is_active {
+            row_p.circle_filled(dot_pos, 2.8, t.accent);
+        }
 
         // Component name
-        let name = component_names.get(&cid).map(|s| s.as_str()).unwrap_or("Component");
-        row_p.text(pos2(row_rect.left() + 24.0, row_rect.center().y), egui::Align2::LEFT_CENTER, name, FontId::proportional(11.0), t.text);
+        let text_color = if is_active || resp.hovered() { t.text } else { t.text_dim };
+        row_p.text(pos2(row_rect.left() + 27.0, row_rect.center().y), egui::Align2::LEFT_CENTER, name, FontId::proportional(11.0), text_color);
     }
 }
 
