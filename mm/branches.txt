@@ -1,0 +1,7 @@
+# Branches for the mm/releases build, besides the open pull requests found automatically.
+#
+#   include <branch>   merge this fork branch too (after the pull requests, in file order)
+#   exclude <branch>   leave this branch out even though it has an open pull request
+#
+# Example:
+#   include bugfix/feature_suppression_provenance
