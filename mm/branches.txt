@@ -5,3 +5,7 @@
 #
 # Example:
 #   include bugfix/feature_suppression_provenance
+
+# PR #4802 was written for the old kernel; upstream moved to SMLib/solidcore on 2026-11-02.
+# Left out until it is ported (waiting for the maintainers' answer on the PR).
+exclude feature/emboss_on_concave_surfaces
