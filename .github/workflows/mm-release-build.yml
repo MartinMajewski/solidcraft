@@ -116,6 +116,10 @@ jobs:
       - name: Build SolidCraft MM
         id: build
         run: tooling/mm/build-macos.sh --src src --out dist --arch aarch64
+      # The DMG step leaves a Python venv in target/; the cache step cannot walk it.
+      - name: Remove the DMG helper venv
+        if: always()
+        run: rm -rf src/target/macos-package/dmg-venv
       - name: Publish the prerelease
         env:
           GH_TOKEN: ${{ secrets.MM_SYNC_TOKEN }}
