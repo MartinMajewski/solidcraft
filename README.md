@@ -73,7 +73,9 @@ switched. The parts can run alone: `mm/sync.sh --help`, `mm/build-macos.sh --hel
 
 ## When a merge conflicts
 
-The run fails and its summary names the branch and the files. Then:
+The run fails once and its summary names the branch and the files. Later nightly runs skip
+quietly, without failing, until a fork branch, mm/tooling or the list of open pull requests
+changes; a manual run always tries again. Then:
 
     git switch -c mm/resolve/<branch> fork/<branch>
     git merge upstream/main          # and any earlier branch in the list it conflicts with

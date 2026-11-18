@@ -5,6 +5,8 @@
 #   sync   fast-forwards the fork's main to upstream, rebuilds mm/releases (mm/sync.sh) and pushes it
 #   build  when mm/releases changed or has no build yet: builds the macOS app (mm/build-macos.sh)
 #          and publishes it as a prerelease tagged mm-<version>-<date>-<sha>
+# A merge conflict fails one run. Later scheduled runs stay quiet (skip, no failure) until a fork
+# branch, mm/tooling or the list of open pull requests changes; a manual run always tries again.
 #
 # Needs the repository secret MM_SYNC_TOKEN: a fine-grained token for this fork only, with
 # Contents and Workflows read/write. The built-in GITHUB_TOKEN may not push commits that change
@@ -50,7 +52,24 @@ jobs:
         with:
           path: tooling
           persist-credentials: false
+      - name: Fingerprint the fork's branches and open pull requests
+        id: fp
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          . tooling/mm/config.sh
+          fp="$( { git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" 'refs/heads/*' | grep -vE 'refs/heads/(main|mm/releases)$'
+            gh pr list -R "$UPSTREAM_REPO" --author "$PR_AUTHOR" --state open --json number --jq '.[].number'; } | sha256sum | cut -c1-16)"
+          echo "key=mm-conflict-$fp" >>"$GITHUB_OUTPUT"
+      # A cache entry under this key means this exact state already failed on a conflict.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: known
+        if: github.event_name == 'schedule'
+        with:
+          path: conflict-seen
+          key: ${{ steps.fp.outputs.key }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.known.outputs.cache-hit != 'true'
         with:
           ref: main
           path: src
@@ -58,6 +77,7 @@ jobs:
           token: ${{ secrets.MM_SYNC_TOKEN }}
       - name: Rebuild mm/releases
         id: sync
+        if: steps.known.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           FORK_REPO: ${{ github.repository }}
@@ -67,6 +87,7 @@ jobs:
           tooling/mm/sync.sh --repo src --out out --push
       - name: Decide whether to build
         id: decide
+        if: steps.known.outputs.cache-hit != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           SHA: ${{ steps.sync.outputs.sha }}
@@ -80,8 +101,19 @@ jobs:
       - name: Summary
         if: always()
         run: |
-          if [ -f out/conflict.md ]; then cat out/conflict.md >>"$GITHUB_STEP_SUMMARY"
+          if [ -f conflict-seen/conflict.md ] && [ ! -d out ]; then
+            { echo "Skipped: still waiting for the merge conflict reported earlier to be fixed."; echo
+              cat conflict-seen/conflict.md; } >>"$GITHUB_STEP_SUMMARY"
+          elif [ -f out/conflict.md ]; then cat out/conflict.md >>"$GITHUB_STEP_SUMMARY"
           elif [ -f out/manifest.md ]; then cat out/manifest.md >>"$GITHUB_STEP_SUMMARY"; fi
+      - name: Remember the conflict
+        if: failure() && steps.sync.outcome == 'failure' && hashFiles('out/conflict.md') != ''
+        run: mkdir -p conflict-seen && cp out/conflict.md conflict-seen/
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: failure() && steps.sync.outcome == 'failure' && hashFiles('out/conflict.md') != ''
+        with:
+          path: conflict-seen
+          key: ${{ steps.fp.outputs.key }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
